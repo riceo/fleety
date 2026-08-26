@@ -1,0 +1,16 @@
+{
+  "name": "invicta-tracker",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Invicta Aero Club fleet tracker (FleetView)",
+  "scripts": {
+    "dev:server": "npm --prefix server run dev",
+    "dev:web": "npm --prefix web run dev",
+    "build": "npm --prefix web run build && npm --prefix server run build",
+    "test": "npm --prefix server test",
+    "start": "npm --prefix server start"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

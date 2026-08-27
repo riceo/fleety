@@ -40,6 +40,8 @@ async function build(): Promise<World> {
         .prepare("INSERT INTO clubs (slug, name, kiosk_token, created_at) VALUES (?, ?, ?, ?)")
         .run(slug, slug.toUpperCase(), `kiosk-${slug}-token-000000`, now).lastInsertRowid
     );
+  // NB: migration 5 already seeds the founding 'invicta' club, which also
+  // serves as the DEFAULT_CLUB target for the localhost-fallback assertion.
   const clubA = mkClub('alpha');
   const clubB = mkClub('bravo');
 
@@ -102,6 +104,18 @@ describe('tenant isolation', () => {
     expect(res.json().siteName).toBe('ALPHA');
     const resB = await w.app.inject({ url: '/api/config', headers: HOST_B });
     expect(resB.json().siteName).toBe('BRAVO');
+  });
+
+  it('the apex and unknown base-domain subdomains get the platform landing, never a club', async () => {
+    const apex = await w.app.inject({ url: '/api/config', headers: { host: 'fleety.live' } });
+    expect(apex.json().platform).toBe(true);
+    const www = await w.app.inject({ url: '/api/config', headers: { host: 'www.fleety.live' } });
+    expect(www.json().platform).toBe(true);
+    const unknown = await w.app.inject({ url: '/api/config', headers: { host: 'nosuchclub.fleety.live' } });
+    expect(unknown.json().platform).toBe(true);
+    // Off-domain hosts (local dev) still fall back to the default club.
+    const local = await w.app.inject({ url: '/api/config', headers: { host: 'localhost:8080' } });
+    expect(local.json().clubSlug).toBe('invicta');
   });
 
   it("a member of club B cannot view club A's data", async () => {

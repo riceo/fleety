@@ -80,9 +80,12 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
 
   app.addHook('onRequest', async (req, reply) => {
     req.auth = resolveSession(db, req.cookies[SESSION_COOKIE]);
-    // Tenant resolution: subdomain first, DEFAULT_CLUB as the localhost/QA
-    // fallback. Apex/unknown hosts get club = null (platform landing).
-    req.club = clubs.fromHost(req.headers.host) ?? clubs.slug(config.defaultClubSlug) ?? null;
+    // Tenant resolution: club subdomains resolve to their club; the apex and
+    // unknown *.baseDomain hosts get the platform landing (club = null); only
+    // hosts outside the base domain (localhost/dev) fall back to DEFAULT_CLUB.
+    req.club =
+      clubs.fromHost(req.headers.host) ??
+      (clubs.isBaseHost(req.headers.host) ? null : (clubs.slug(config.defaultClubSlug) ?? null));
     if (req.url.startsWith('/api/')) {
       reply.header('Cache-Control', 'no-store');
       if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && req.headers['x-fleetview'] !== '1') {

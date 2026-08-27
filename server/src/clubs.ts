@@ -55,8 +55,7 @@ export class Clubs {
   }
 
   // invicta.fleety.live -> club "invicta". Anything that isn't a club
-  // subdomain of the base domain (apex, www, localhost, raw IP) returns null —
-  // the caller shows the platform landing or falls back to DEFAULT_CLUB.
+  // subdomain of the base domain (apex, www, localhost, raw IP) returns null.
   fromHost(hostHeader: string | undefined): ClubRow | null {
     const host = (hostHeader ?? '').split(':')[0].toLowerCase();
     const base = config.baseDomain.toLowerCase();
@@ -67,6 +66,16 @@ export class Clubs {
       }
     }
     return null;
+  }
+
+  // Is this host the platform's own domain (apex/www/any *.base subdomain)?
+  // Those must NEVER fall back to the default club — the apex shows the
+  // Fleety landing page. The default-club fallback exists only for hosts
+  // outside the base domain entirely (localhost, raw IPs, dev tunnels).
+  isBaseHost(hostHeader: string | undefined): boolean {
+    const host = (hostHeader ?? '').split(':')[0].toLowerCase();
+    const base = config.baseDomain.toLowerCase();
+    return !!host && !!base && (host === base || host.endsWith(`.${base}`));
   }
 
   rules(club: ClubRow): CallsignRule[] {

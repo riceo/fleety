@@ -106,6 +106,63 @@ describe('Poller', () => {
     expect(logs.some((l) => l.provider === 'primary' && l.ok === 0)).toBe(true);
   });
 
+  it('rescue tier probes only vanished open-flight aircraft, spending the persistent budget', async () => {
+    const w = world();
+    w.mkAc(w.clubA, 'aaaaaa');
+    let primaryReturns: ProviderStates = { positions: [pos('aaaaaa', Date.now())], presences: [] };
+    const primary: AdsbProvider = { name: 'primary', fetchStates: async () => primaryReturns };
+    const rescueCalls: string[][] = [];
+    const rescueProvider: AdsbProvider = {
+      name: 'adsbx',
+      fetchStates: async (hexes) => {
+        rescueCalls.push(hexes);
+        return EMPTY;
+      },
+    };
+    const poller = new Poller(w.db, [primary], w.settings, w.detector, w.live, {
+      provider: rescueProvider,
+      monthlyBudget: 100,
+    });
+
+    await poller.runCycle(); // flight opens from the primary fix
+    expect(rescueCalls).toHaveLength(0); // freshly heard: no rescue
+
+    primaryReturns = EMPTY; // contact vanishes mid-flight
+    await poller.runCycle();
+    expect(rescueCalls).toEqual([['aaaaaa']]); // vanished + open flight => probe
+    expect(JSON.parse(w.settings.get('adsbx_usage')).used).toBe(1);
+
+    await poller.runCycle(); // 2-minute per-aircraft floor: no second probe yet
+    expect(rescueCalls).toHaveLength(1);
+  });
+
+  it('rescue tier never exceeds the monthly budget', async () => {
+    const w = world();
+    w.mkAc(w.clubA, 'aaaaaa');
+    let primaryReturns: ProviderStates = { positions: [pos('aaaaaa', Date.now())], presences: [] };
+    const primary: AdsbProvider = { name: 'primary', fetchStates: async () => primaryReturns };
+    const rescueCalls: string[][] = [];
+    const rescueProvider: AdsbProvider = {
+      name: 'adsbx',
+      fetchStates: async (hexes) => {
+        rescueCalls.push(hexes);
+        return EMPTY;
+      },
+    };
+    const poller = new Poller(w.db, [primary], w.settings, w.detector, w.live, {
+      provider: rescueProvider,
+      monthlyBudget: 100,
+    });
+    await poller.runCycle(); // open the flight
+    // Exhaust the meter as if a long month already happened.
+    const month = new Date().toISOString().slice(0, 7);
+    const day = new Date().toISOString().slice(0, 10);
+    w.settings.set('adsbx_usage', JSON.stringify({ month, used: 100, day, usedToday: 0 }));
+    primaryReturns = EMPTY;
+    await poller.runCycle();
+    expect(rescueCalls).toHaveLength(0); // budget hit: silence, not spend
+  });
+
   it('presences never advance the position dedupe watermark or store rows', async () => {
     const w = world();
     const acId = w.mkAc(w.clubA, 'aaaaaa');

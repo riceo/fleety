@@ -1056,8 +1056,20 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
       ).c,
       members: (db.prepare('SELECT COUNT(*) c FROM memberships WHERE club_id = ?').get(club.id) as { c: number }).c,
     };
+    let rescueUsage: { month?: string; used?: number } = {};
+    try {
+      rescueUsage = JSON.parse(settings.get('adsbx_usage', '{}'));
+    } catch {
+      /* unparsed */
+    }
     return {
       poller: { lastPollAt: poller.lastPollAt, ok: poller.lastPollOk, error: poller.lastPollError },
+      rescue: {
+        configured: !!config.adsbxApiKey,
+        month: rescueUsage.month ?? null,
+        used: rescueUsage.used ?? 0,
+        budget: config.adsbxMonthlyBudget,
+      },
       recentPolls: db.prepare('SELECT * FROM poll_log ORDER BY ts DESC LIMIT 30').all(),
       counts,
       dbSizeBytes: dbFileSizeBytes(),

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Navigate, useParams } from 'react-router-dom';
+import { Navigate, useNavigate, useParams } from 'react-router-dom';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { api, type Flight } from '../api';
@@ -13,6 +13,7 @@ type TrackPoint = [lon: number, lat: number, ts: number, alt: number | null, gs:
 export function ReplayPage() {
   const { me, config, loading } = useAuth();
   const { flightId } = useParams();
+  const navigate = useNavigate();
   const [flight, setFlight] = useState<Flight | null>(null);
   const [points, setPoints] = useState<TrackPoint[]>([]);
   const [idx, setIdx] = useState(0);
@@ -180,6 +181,12 @@ export function ReplayPage() {
               </span>
             </>
           )}
+          <button
+            className="btn btn-ghost small replay-exit"
+            onClick={() => (window.history.length > 1 ? navigate(-1) : navigate('/history'))}
+          >
+            ✕ EXIT REPLAY
+          </button>
         </div>
         <div className="replay-map">
           <div ref={mapDiv} className="map-container" />

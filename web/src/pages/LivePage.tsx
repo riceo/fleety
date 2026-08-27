@@ -192,7 +192,7 @@ export function LivePage() {
                 )}
                 {selected.flightId && me?.user && (
                   <Link className="btn small" to={`/history/${selected.flightId}`}>
-                    FLIGHT SO FAR
+                    FLIGHT TRACK
                   </Link>
                 )}
                 <button

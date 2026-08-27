@@ -18,6 +18,14 @@ const FAILOVER_COOLDOWN_MS = 60_000;
 // When the primary keeps failing while the failover rescues cycles, probe the
 // primary only every Nth cycle instead of hammering it at full cadence.
 const PRIMARY_PROBE_EVERY = 6;
+// Rescue tier (ADSBx, paid per request): probe an aircraft at most this often.
+const RESCUE_MIN_INTERVAL_MS = 120_000;
+const RESCUE_MAX_PER_CYCLE = 2;
+
+export interface RescueTier {
+  provider: AdsbProvider;
+  monthlyBudget: number; // hard cap on requests per UTC month
+}
 
 // ONE poller for the whole platform: every tracked hex across every club is
 // batched into shared upstream calls, so API load stays near-constant no
@@ -30,6 +38,9 @@ export class Poller {
   private cycleCount = 0;
   private failoverCursor = 0;
   private failoverCooldownUntil = 0;
+  private rescueCooldownUntil = 0;
+  private lastRescueProbe = new Map<string, number>();
+  private lastRescueErrLogAt = 0;
   private lastOkLogAt = 0;
   private lastFailoverErrLogAt = 0;
   private lastDeadmanAt = 0;
@@ -46,7 +57,10 @@ export class Poller {
     private providers: AdsbProvider[],
     private settings: Settings,
     private detector: FlightDetector,
-    private live: LiveBus
+    private live: LiveBus,
+    // Optional paid rescue tier: fired ONLY for aircraft whose open flight
+    // vanished from every free network, under a hard persistent budget.
+    private rescue?: RescueTier
   ) {
     // Prime dedupe watermarks so a restart doesn't re-store stale fixes.
     const rows = this.db
@@ -170,6 +184,76 @@ export class Poller {
     return anyActive;
   }
 
+  // Persistent request budget for the rescue tier — survives restarts (we
+  // redeploy often; an in-memory counter would quietly reset the meter).
+  private rescueUsage(): { month: string; used: number; day: string; usedToday: number } {
+    const now = new Date();
+    const month = now.toISOString().slice(0, 7);
+    const day = now.toISOString().slice(0, 10);
+    let u: { month: string; used: number; day: string; usedToday: number };
+    try {
+      u = JSON.parse(this.settings.get('adsbx_usage', '{}'));
+    } catch {
+      u = { month, used: 0, day, usedToday: 0 };
+    }
+    if (u.month !== month) u = { month, used: 0, day, usedToday: 0 };
+    if (u.day !== day) {
+      u.day = day;
+      u.usedToday = 0;
+    }
+    if (!Number.isFinite(u.used)) u.used = 0;
+    if (!Number.isFinite(u.usedToday)) u.usedToday = 0;
+    return u;
+  }
+
+  private rescueBudgetAllows(n: number): boolean {
+    if (!this.rescue) return false;
+    const u = this.rescueUsage();
+    // Daily throttle at 2x the monthly average smooths bursts while the
+    // monthly cap stays absolute.
+    const dailyCap = Math.ceil((this.rescue.monthlyBudget / 30) * 2);
+    return u.used + n <= this.rescue.monthlyBudget && u.usedToday + n <= dailyCap;
+  }
+
+  private spendRescue(n: number): void {
+    const u = this.rescueUsage();
+    u.used += n;
+    u.usedToday += n;
+    this.settings.set('adsbx_usage', JSON.stringify(u));
+  }
+
+  // Vanished-in-flight rescue: an aircraft with an OPEN flight that no free
+  // network freshly hears gets an ADSBx probe, at most every 2 minutes, at
+  // most 2 hexes per cycle, inside the hard budget. Requests are spent even
+  // when the call fails — RapidAPI meters attempts, so must we.
+  private async rescuePass(byHex: Map<string, AircraftRow[]>, freshlyHeard: Set<string>): Promise<boolean> {
+    if (!this.rescue || Date.now() < this.rescueCooldownUntil) return false;
+    const now = Date.now();
+    const candidates = [...byHex.entries()]
+      .filter(
+        ([hex, acs]) =>
+          !freshlyHeard.has(hex) &&
+          acs.some((ac) => this.detector.currentFlightId(ac.id) !== null) &&
+          now - (this.lastRescueProbe.get(hex) ?? 0) >= RESCUE_MIN_INTERVAL_MS
+      )
+      .map(([hex]) => hex)
+      .slice(0, RESCUE_MAX_PER_CYCLE);
+    if (candidates.length === 0 || !this.rescueBudgetAllows(candidates.length)) return false;
+    this.spendRescue(candidates.length);
+    for (const h of candidates) this.lastRescueProbe.set(h, now);
+    try {
+      const states = await this.rescue.provider.fetchStates(candidates);
+      return this.applyBatch(states, byHex);
+    } catch (err) {
+      this.rescueCooldownUntil = Date.now() + FAILOVER_COOLDOWN_MS;
+      if (Date.now() - this.lastRescueErrLogAt > 5 * 60_000) {
+        this.lastRescueErrLogAt = Date.now();
+        this.logPoll(this.rescue.provider.name, false, null, String(err), 0, 0);
+      }
+      return false;
+    }
+  }
+
   // One full poll cycle. Public so tests can drive it directly.
   async runCycle(): Promise<void> {
     const started = Date.now();
@@ -238,6 +322,7 @@ export class Poller {
         ]);
         const missing = hexes.filter((h) => !freshlyHeard.has(h));
         let rescued = false;
+        const allFresh = new Set(freshlyHeard);
         if (failover && missing.length > 0 && Date.now() >= this.failoverCooldownUntil) {
           const start = this.failoverCursor % missing.length;
           const window = missing.slice(start, start + HEXES_PER_CALL);
@@ -249,6 +334,8 @@ export class Poller {
             const fo = await failover.fetchStates(window);
             anyActive = this.applyBatch(fo, byHex) || anyActive;
             rescued = fo.positions.length > 0 || fo.presences.length > 0;
+            for (const x of fo.positions) if ((x.seenPos ?? 0) <= HEARD_FRESH_SEC) allFresh.add(x.hex);
+            for (const x of fo.presences) if (x.seen <= HEARD_FRESH_SEC) allFresh.add(x.hex);
           } catch (foErr) {
             this.failoverCooldownUntil = Date.now() + FAILOVER_COOLDOWN_MS;
             if (Date.now() - this.lastFailoverErrLogAt > 5 * 60_000) {
@@ -257,6 +344,8 @@ export class Poller {
             }
           }
         }
+
+        anyActive = (await this.rescuePass(byHex, allFresh)) || anyActive;
 
         this.detector.tick(Date.now());
 

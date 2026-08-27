@@ -16,6 +16,10 @@ export const config = {
   // defaultClubSlug (handy for localhost QA) or the platform landing page.
   baseDomain: env.BASE_DOMAIN || 'fleety.live',
   defaultClubSlug: env.DEFAULT_CLUB || 'invicta',
+  // ADSBexchange rescue tier (optional): probed ONLY for aircraft whose open
+  // flight vanished from both free networks, under a hard monthly budget.
+  adsbxApiKey: env.ADSBX_API_KEY || '',
+  adsbxMonthlyBudget: Number(env.ADSBX_MONTHLY_BUDGET || 9000),
   // Resend (optional): invites/resets are emailed when configured, otherwise
   // the admin gets a shareable link instead.
   resendApiKey: env.RESEND_API_KEY || '',

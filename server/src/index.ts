@@ -10,6 +10,7 @@ import { FlightDetector } from './tracking/flightDetector.js';
 import { Poller } from './tracking/poller.js';
 import { AdsbLolProvider } from './providers/adsbLol.js';
 import { AdsbFiProvider } from './providers/adsbFi.js';
+import { AdsbxProvider } from './providers/adsbx.js';
 import { lookupRouteForFlight } from './enrichment/lookup.js';
 import { onLanding, onTakeoff, type TickerEmit } from './annotations.js';
 import { Clubs } from './clubs.js';
@@ -37,7 +38,10 @@ async function main() {
     },
   });
 
-  const poller = new Poller(db, [new AdsbLolProvider(), new AdsbFiProvider()], settings, detector, live);
+  const rescue = config.adsbxApiKey
+    ? { provider: new AdsbxProvider(), monthlyBudget: config.adsbxMonthlyBudget }
+    : undefined;
+  const poller = new Poller(db, [new AdsbLolProvider(), new AdsbFiProvider()], settings, detector, live, rescue);
 
   // Rehydrate live trails for flights that were open when we last stopped.
   const openFlights = db

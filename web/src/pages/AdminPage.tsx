@@ -3,6 +3,7 @@ import { Navigate, NavLink, Outlet } from 'react-router-dom';
 import { api, del, post, put, type Flight } from '../api';
 import { isAdmin, useAuth } from '../auth';
 import { TopBar } from '../components/TopBar';
+import { ImageCropper } from '../components/ImageCropper';
 import { BUILTIN_ICONS, ICON_KEYS } from '../icons';
 import { fmtDateTime, fmtDuration, fmtNm, fmtAgo } from '../format';
 
@@ -166,11 +167,19 @@ function AircraftForm({ initial, onDone }: { initial: Partial<AdminAircraft>; on
     }
   };
 
-  const upload = async (kind: 'icon' | 'photo', file: File) => {
+  const upload = async (kind: 'icon' | 'photo', file: Blob, name: string) => {
     const fd = new FormData();
-    fd.append('file', file);
+    fd.append('file', file, name);
     await api(`/api/admin/aircraft/${initial.id}/image?kind=${kind}`, { method: 'POST', body: fd });
     onDone();
+  };
+
+  // Selected files pass through the cropper first so what's uploaded is
+  // exactly the frame that will be displayed (photo cards 3:2, icons square).
+  const [cropping, setCropping] = useState<{ kind: 'icon' | 'photo'; file: File } | null>(null);
+  const CROP_SPEC = {
+    photo: { aspect: 3 / 2, outWidth: 1200, outType: 'image/jpeg' as const, name: 'photo.jpg', title: 'Position the photo' },
+    icon: { aspect: 1, outWidth: 256, outType: 'image/png' as const, name: 'icon.png', title: 'Position the icon' },
   };
 
   return (
@@ -267,7 +276,15 @@ function AircraftForm({ initial, onDone }: { initial: Partial<AdminAircraft>; on
         <div className="upload-row">
           <label className="btn small">
             {initial.icon_path ? 'Replace custom icon' : 'Upload custom icon'}
-            <input type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={(e) => e.target.files?.[0] && void upload('icon', e.target.files[0])} />
+            <input
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              hidden
+              onChange={(e) => {
+                if (e.target.files?.[0]) setCropping({ kind: 'icon', file: e.target.files[0] });
+                e.target.value = '';
+              }}
+            />
           </label>
           {initial.icon_path && (
             <button className="btn btn-ghost small" onClick={() => void del(`/api/admin/aircraft/${initial.id}/image?kind=icon`).then(onDone)}>
@@ -276,7 +293,15 @@ function AircraftForm({ initial, onDone }: { initial: Partial<AdminAircraft>; on
           )}
           <label className="btn small">
             {initial.photo_path ? 'Replace photo' : 'Upload photo'}
-            <input type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={(e) => e.target.files?.[0] && void upload('photo', e.target.files[0])} />
+            <input
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              hidden
+              onChange={(e) => {
+                if (e.target.files?.[0]) setCropping({ kind: 'photo', file: e.target.files[0] });
+                e.target.value = '';
+              }}
+            />
           </label>
           {initial.photo_path && (
             <>
@@ -287,6 +312,22 @@ function AircraftForm({ initial, onDone }: { initial: Partial<AdminAircraft>; on
             </>
           )}
         </div>
+      )}
+
+      {cropping && (
+        <ImageCropper
+          file={cropping.file}
+          aspect={CROP_SPEC[cropping.kind].aspect}
+          outWidth={CROP_SPEC[cropping.kind].outWidth}
+          outType={CROP_SPEC[cropping.kind].outType}
+          title={CROP_SPEC[cropping.kind].title}
+          onDone={(blob) => {
+            const { kind } = cropping;
+            setCropping(null);
+            void upload(kind, blob, CROP_SPEC[kind].name);
+          }}
+          onCancel={() => setCropping(null)}
+        />
       )}
 
       {error && <p className="form-error">{error}</p>}
@@ -1288,6 +1329,7 @@ interface StatusRes {
   counts: { positions: number; flights: number; aircraft: number; users: number };
   dbSizeBytes: number;
   sseClients: number;
+  rescue?: { configured: boolean; month: string | null; used: number; budget: number };
 }
 
 export function StatusAdmin() {
@@ -1326,6 +1368,15 @@ export function StatusAdmin() {
           <label>Live viewers</label>
           <strong>{data.sseClients}</strong>
         </div>
+        {data.rescue?.configured && (
+          <div className={`stat-tile ${data.rescue.used >= data.rescue.budget ? 'bad' : 'ok'}`}>
+            <label>ADSBx rescue budget</label>
+            <strong>
+              {data.rescue.used.toLocaleString()} / {data.rescue.budget.toLocaleString()}
+            </strong>
+            <span className="muted small">requests this month{data.rescue.month ? ` (${data.rescue.month})` : ''}</span>
+          </div>
+        )}
       </div>
       <h3>Recent polls</h3>
       <table className="table">

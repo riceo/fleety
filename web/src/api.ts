@@ -23,6 +23,7 @@ export interface LiveAircraft {
   typeName: string;
   nickname: string;
   tagline: string;
+  description: string;
   category: 'fleet' | 'guest';
   visibility: 'public' | 'members';
   icon: string;

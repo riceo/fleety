@@ -268,6 +268,14 @@ CREATE TABLE login_tokens (
 );
 `,
   },
+  {
+    // Viewer-facing aircraft description ("4-seat tourer — our IFR trainer"),
+    // distinct from the admin-only notes field.
+    id: 6,
+    sql: `
+ALTER TABLE aircraft ADD COLUMN description TEXT NOT NULL DEFAULT '';
+`,
+  },
 ];
 
 export function migrate(db: Database): void {

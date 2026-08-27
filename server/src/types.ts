@@ -41,6 +41,7 @@ export interface AircraftRow {
   icao_type: string;
   nickname: string;
   tagline: string;
+  description: string;
   operator: string;
   icon: string;
   icon_path: string | null;
@@ -101,6 +102,7 @@ export interface LiveAircraft {
   typeName: string;
   nickname: string;
   tagline: string; // standing per-aircraft message ("aerobatic display ship…")
+  description: string; // viewer-facing blurb ("4-seat tourer")
   category: 'fleet' | 'guest';
   visibility: 'public' | 'members';
   icon: string;

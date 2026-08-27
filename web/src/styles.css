@@ -684,6 +684,18 @@ label.check {
 .target-sub {
   padding: 0.25rem 0.75rem 0;
 }
+.target-desc {
+  margin: 0.55rem 0.75rem 0;
+  font-size: 0.88rem;
+  color: var(--ink);
+  line-height: 1.4;
+}
+.board-card-desc {
+  margin-top: 0.45rem;
+  font-size: 0.95rem;
+  color: var(--ink);
+  line-height: 1.35;
+}
 .target-tagline {
   margin: 0.55rem 0.75rem 0;
   font-size: 0.85rem;

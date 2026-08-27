@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Navigate } from 'react-router-dom';
-import { api, post } from '../api';
+import { api, post, put } from '../api';
 import { isPlatformAdmin, useAuth } from '../auth';
 import { FleetyMark, TopBar } from '../components/TopBar';
+import { fmtAgo } from '../format';
 
 // Apex-domain landing (no club subdomain matched).
 export function LandingPage() {
@@ -37,9 +38,19 @@ interface PlatformClub {
   aircraft: number;
 }
 
+interface PlatformUser {
+  id: number;
+  username: string;
+  email: string | null;
+  platform_admin: number;
+  last_login_at: number | null;
+  clubs: string | null; // "invicta:admin,downland:member"
+}
+
 export function PlatformPage() {
   const { me, loading } = useAuth();
   const [clubs, setClubs] = useState<PlatformClub[]>([]);
+  const [users, setUsers] = useState<PlatformUser[]>([]);
   const [slug, setSlug] = useState('');
   const [name, setName] = useState('');
   const [error, setError] = useState('');
@@ -48,8 +59,29 @@ export function PlatformPage() {
     api<{ clubs: PlatformClub[] }>('/api/platform/clubs')
       .then((r) => setClubs(r.clubs))
       .catch(() => {});
+    api<{ users: PlatformUser[] }>('/api/platform/users')
+      .then((r) => setUsers(r.users))
+      .catch(() => {});
   }, []);
   useEffect(load, [load]);
+
+  const togglePlatformAdmin = async (u: PlatformUser) => {
+    const making = u.platform_admin !== 1;
+    if (
+      !window.confirm(
+        making
+          ? `Make ${u.email ?? u.username} a platform admin? They get admin access to EVERY club.`
+          : `Remove platform admin from ${u.email ?? u.username}?`
+      )
+    )
+      return;
+    try {
+      await put(`/api/platform/users/${u.id}`, { platformAdmin: making });
+      load();
+    } catch (err) {
+      window.alert(`Failed: ${err instanceof Error ? err.message : err}`);
+    }
+  };
 
   if (!loading && !isPlatformAdmin(me)) return <Navigate to="/" replace />;
 
@@ -111,6 +143,40 @@ export function PlatformPage() {
                 <td>{c.publicMode ? 'public' : 'private'}</td>
                 <td>{c.members}</td>
                 <td>{c.aircraft}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+
+        <h1 style={{ marginTop: '2rem' }}>Platform — users</h1>
+        <p className="muted small">
+          Every account across every club. Club roles are managed inside each club (Admin → Members); platform
+          admins have full access to all clubs and this panel.
+        </p>
+        <table className="table">
+          <thead>
+            <tr>
+              <th>User</th>
+              <th>Clubs</th>
+              <th>Last sign-in</th>
+              <th>Platform admin</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {users.map((u) => (
+              <tr key={u.id}>
+                <td>
+                  <strong>{u.email ?? u.username}</strong>
+                </td>
+                <td className="muted small">{u.clubs ? u.clubs.split(',').join(' · ') : '—'}</td>
+                <td className="muted">{u.last_login_at ? fmtAgo(u.last_login_at) : 'never'}</td>
+                <td>{u.platform_admin === 1 ? '✓' : ''}</td>
+                <td className="row-actions">
+                  <button className="btn btn-ghost small" onClick={() => void togglePlatformAdmin(u)}>
+                    {u.platform_admin === 1 ? 'Remove platform admin' : 'Make platform admin'}
+                  </button>
+                </td>
               </tr>
             ))}
           </tbody>

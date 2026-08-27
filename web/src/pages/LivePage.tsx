@@ -106,6 +106,7 @@ export function LivePage() {
               <div className="target-sub mono-label">
                 {selected.registration} · {(selected.nickname || selected.typeName).toUpperCase()}
               </div>
+              {selected.description && <p className="target-desc">{selected.description}</p>}
               {selected.tagline && <p className="target-tagline">{selected.tagline}</p>}
               {selected.note && <p className="target-note">{selected.note}</p>}
               <div className="target-grid">

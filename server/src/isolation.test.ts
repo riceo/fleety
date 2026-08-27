@@ -176,6 +176,49 @@ describe('tenant isolation', () => {
     expect(meB.json().user.role).toBeNull();
   });
 
+  it('platform admin flag is manageable but the last one is protected', async () => {
+    const adminId = (w.db.prepare("SELECT id FROM users WHERE email='admin@alpha.club'").get() as { id: number }).id;
+    const memberId = (w.db.prepare("SELECT id FROM users WHERE email='member@bravo.club'").get() as { id: number }).id;
+
+    // A club admin without the flag cannot touch platform users.
+    const denied = await w.app.inject({
+      method: 'PUT',
+      url: `/api/platform/users/${memberId}`,
+      headers: { ...HOST_A, cookie: w.cookieAdminA, 'x-fleetview': '1', 'content-type': 'application/json' },
+      payload: { platformAdmin: true },
+    });
+    expect(denied.statusCode).toBe(403);
+
+    w.db.prepare('UPDATE users SET platform_admin = 1 WHERE id = ?').run(adminId);
+    const cookie = `fv_session=${createSession(w.db, 'user', adminId)}`;
+    const headers = { ...HOST_A, cookie, 'x-fleetview': '1', 'content-type': 'application/json' };
+
+    const grant = await w.app.inject({
+      method: 'PUT',
+      url: `/api/platform/users/${memberId}`,
+      headers,
+      payload: { platformAdmin: true },
+    });
+    expect(grant.statusCode).toBe(200);
+
+    const revokeOther = await w.app.inject({
+      method: 'PUT',
+      url: `/api/platform/users/${memberId}`,
+      headers,
+      payload: { platformAdmin: false },
+    });
+    expect(revokeOther.statusCode).toBe(200);
+
+    // Now the only platform admin cannot demote themselves.
+    const revokeSelf = await w.app.inject({
+      method: 'PUT',
+      url: `/api/platform/users/${adminId}`,
+      headers,
+      payload: { platformAdmin: false },
+    });
+    expect(revokeSelf.statusCode).toBe(400);
+  });
+
   it('platform admins can create clubs; club admins cannot', async () => {
     const denied = await w.app.inject({
       method: 'POST',

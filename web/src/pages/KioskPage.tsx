@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { post, type LiveAircraft } from '../api';
 import { useAuth } from '../auth';
 import { useLiveFleet } from '../live';
@@ -36,6 +37,7 @@ function BoardCard({ a, focused }: { a: LiveAircraft; focused: boolean }) {
         <div className="mono-label">
           {a.registration} · {(a.nickname || a.typeName).toUpperCase()}
         </div>
+        {focused && a.description && <div className="board-card-desc">{a.description}</div>}
         {airborne && a.pos ? (
           <div className="board-card-data">
             <span>
@@ -60,6 +62,7 @@ const CYCLE_MS = 12_000;
 const EVENT_HOLD_MS = 25_000;
 
 export function KioskPage() {
+  const navigate = useNavigate();
   const { config, refresh, loading } = useAuth();
   const [ready, setReady] = useState(false);
   const [authFailed, setAuthFailed] = useState(false);
@@ -169,7 +172,15 @@ export function KioskPage() {
   return (
     <div className="kiosk">
       <header className="kiosk-header">
-        <div className="brand">
+        {/* Clicking the brand quietly exits kiosk mode (handy after the
+            topbar Kiosk button; a TV never clicks it). */}
+        <div
+          className="brand"
+          onClick={() => {
+            if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
+            navigate('/');
+          }}
+        >
           {config.logoUrl ? <img src={config.logoUrl} alt="" className="brand-logo" /> : <FleetyMark />}
           <span className="brand-name">
             {config.siteName.toUpperCase()}

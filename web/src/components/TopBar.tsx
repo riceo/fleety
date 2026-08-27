@@ -51,9 +51,23 @@ export function TopBar() {
         {isPlatformAdmin(me) && <NavLink to="/platform">Platform</NavLink>}
       </nav>
       <div className="topbar-right">
+        {(isAdmin(me) || me?.user?.role === 'member') && (
+          <button
+            className="btn btn-ghost"
+            title="Full-screen board for a big display"
+            onClick={() => {
+              void document.documentElement.requestFullscreen?.().catch(() => {});
+              navigate('/kiosk');
+            }}
+          >
+            ▣ Kiosk
+          </button>
+        )}
         {me?.user ? (
           <>
-            <span className="username mono-label">{(me.user.email ?? me.user.username).toUpperCase()}</span>
+            <Link className="username mono-label" to="/account">
+              {(me.user.email ?? me.user.username).toUpperCase()}
+            </Link>
             <button className="btn btn-ghost" onClick={() => void logout()}>
               Sign out
             </button>

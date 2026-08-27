@@ -409,7 +409,7 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     return {
       aircraft: db
         .prepare(
-          `SELECT id, hex, registration, callsign, type_name, nickname, tagline, category, color, icon, icon_path, photo_path, enabled
+          `SELECT id, hex, registration, callsign, type_name, nickname, tagline, description, category, color, icon, icon_path, photo_path, enabled
            FROM aircraft WHERE club_id = ? AND deleted_at IS NULL${visFilter} ORDER BY sort_order, id`
         )
         .all(club.id),
@@ -447,6 +447,7 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     icao_type: String(body.icaoType ?? '').trim().toUpperCase(),
     nickname: String(body.nickname ?? '').trim(),
     tagline: String(body.tagline ?? '').trim().slice(0, 160),
+    description: String(body.description ?? '').trim().slice(0, 240),
     operator: String(body.operator ?? '').trim(),
     icon: String(body.icon ?? 'low-wing'),
     color: /^#[0-9a-fA-F]{6}$/.test(String(body.color)) ? String(body.color) : '#e32636',
@@ -477,9 +478,9 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     try {
       const res = db
         .prepare(
-          `INSERT INTO aircraft (club_id, hex, registration, callsign, type_name, icao_type, nickname, tagline, operator, icon, color,
+          `INSERT INTO aircraft (club_id, hex, registration, callsign, type_name, icao_type, nickname, tagline, description, operator, icon, color,
              enabled, category, visibility, track_until, sort_order, notes, created_at, updated_at)
-           VALUES (@club_id, @hex, @registration, @callsign, @type_name, @icao_type, @nickname, @tagline, @operator, @icon, @color,
+           VALUES (@club_id, @hex, @registration, @callsign, @type_name, @icao_type, @nickname, @tagline, @description, @operator, @icon, @color,
              @enabled, @category, @visibility, @track_until, @sort_order, @notes, ${now}, ${now})`
         )
         .run({ ...a, club_id: club.id });
@@ -500,7 +501,7 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     if (!/^[0-9a-f]{6}$/.test(a.hex)) return reply.code(400).send({ error: 'invalid_hex' });
     db.prepare(
       `UPDATE aircraft SET hex=@hex, registration=@registration, callsign=@callsign, type_name=@type_name,
-         icao_type=@icao_type, nickname=@nickname, tagline=@tagline, operator=@operator, icon=@icon, color=@color, enabled=@enabled,
+         icao_type=@icao_type, nickname=@nickname, tagline=@tagline, description=@description, operator=@operator, icon=@icon, color=@color, enabled=@enabled,
          category=@category, visibility=@visibility, track_until=@track_until, sort_order=@sort_order, notes=@notes,
          updated_at=${Date.now()}
        WHERE id = @id`
@@ -1115,6 +1116,36 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
       if (String(err).includes('UNIQUE')) return reply.code(409).send({ error: 'slug_exists' });
       throw err;
     }
+  });
+
+  app.get('/api/platform/users', async (req, reply) => {
+    if (!requirePlatform(req, reply)) return;
+    const users = db
+      .prepare(
+        `SELECT u.id, u.username, u.email, u.platform_admin, u.last_login_at,
+                (SELECT group_concat(c.slug || ':' || m.role) FROM memberships m JOIN clubs c ON c.id = m.club_id WHERE m.user_id = u.id) AS clubs
+         FROM users u ORDER BY u.email`
+      )
+      .all();
+    return { users };
+  });
+
+  // Grant/revoke platform admin — the last platform admin is protected so the
+  // platform can never lock itself out.
+  app.put('/api/platform/users/:id', async (req, reply) => {
+    if (!requirePlatform(req, reply)) return;
+    const id = Number((req.params as { id: string }).id);
+    const { platformAdmin } = (req.body ?? {}) as { platformAdmin?: boolean };
+    if (typeof platformAdmin !== 'boolean') return reply.code(400).send({ error: 'invalid_body' });
+    if (!platformAdmin) {
+      const admins = (db.prepare('SELECT COUNT(*) c FROM users WHERE platform_admin = 1').get() as { c: number }).c;
+      const isAdminNow = db.prepare('SELECT 1 FROM users WHERE id = ? AND platform_admin = 1').get(id);
+      if (isAdminNow && admins <= 1) return reply.code(400).send({ error: 'last_platform_admin' });
+    }
+    const res = db.prepare('UPDATE users SET platform_admin = ? WHERE id = ?').run(platformAdmin ? 1 : 0, id);
+    if (res.changes === 0) return reply.code(404).send({ error: 'not_found' });
+    audit(req, 'platform.admin_flag', `${id} -> ${platformAdmin}`);
+    return { ok: true };
   });
 
   // ---------- health + SPA ----------

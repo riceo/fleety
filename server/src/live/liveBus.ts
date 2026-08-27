@@ -68,6 +68,7 @@ export class LiveBus {
         typeName: row.type_name,
         nickname: row.nickname,
         tagline: row.tagline,
+        description: row.description,
         category: row.category,
         visibility: row.visibility,
         icon: row.icon,
@@ -86,6 +87,7 @@ export class LiveBus {
       base.typeName = row.type_name;
       base.nickname = row.nickname;
       base.tagline = row.tagline;
+      base.description = row.description;
       base.category = row.category;
       base.visibility = row.visibility;
       base.icon = row.icon;

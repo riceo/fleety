@@ -548,9 +548,48 @@ interface Airfield {
   is_base: number;
 }
 
+interface AirfieldDraft {
+  code: string;
+  name: string;
+  lat: string;
+  lon: string;
+  elevationFt: string;
+  radiusNm: string;
+}
+
 export function AirfieldsAdmin() {
   const [data, reload] = useData<{ airfields: Airfield[] }>('/api/admin/airfields');
   const [f, setF] = useState({ code: '', name: '', lat: '', lon: '', elevationFt: '', radiusNm: '3' });
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [draft, setDraft] = useState<AirfieldDraft | null>(null);
+
+  const startEdit = (a: Airfield) => {
+    setEditingId(a.id);
+    setDraft({
+      code: a.code,
+      name: a.name,
+      lat: String(a.lat),
+      lon: String(a.lon),
+      elevationFt: String(a.elevation_ft),
+      radiusNm: String(a.radius_nm),
+    });
+  };
+
+  const saveEdit = async (a: Airfield) => {
+    if (!draft) return;
+    await put(`/api/admin/airfields/${a.id}`, {
+      code: draft.code,
+      name: draft.name,
+      lat: Number(draft.lat),
+      lon: Number(draft.lon),
+      elevationFt: Number(draft.elevationFt),
+      radiusNm: Number(draft.radiusNm),
+      isBase: a.is_base === 1,
+    });
+    setEditingId(null);
+    setDraft(null);
+    reload();
+  };
 
   const add = async () => {
     await post('/api/admin/airfields', {
@@ -608,30 +647,95 @@ export function AirfieldsAdmin() {
           </tr>
         </thead>
         <tbody>
-          {data?.airfields.map((a) => (
-            <tr key={a.id}>
-              <td>
-                <strong>{a.code}</strong>
-              </td>
-              <td>{a.name}</td>
-              <td className="mono">
-                {a.lat.toFixed(4)}, {a.lon.toFixed(4)}
-              </td>
-              <td>{a.elevation_ft} ft</td>
-              <td>{a.radius_nm} nm</td>
-              <td>
-                <input type="checkbox" checked={a.is_base === 1} onChange={() => void toggleBase(a)} />
-              </td>
-              <td className="row-actions">
-                <button
-                  className="btn btn-ghost small danger"
-                  onClick={() => window.confirm(`Delete ${a.code}?`) && void del(`/api/admin/airfields/${a.id}`).then(reload)}
-                >
-                  Delete
-                </button>
-              </td>
-            </tr>
-          ))}
+          {data?.airfields.map((a) =>
+            editingId === a.id && draft ? (
+              <tr key={a.id}>
+                <td>
+                  <input
+                    value={draft.code}
+                    onChange={(e) => setDraft({ ...draft, code: e.target.value.toUpperCase() })}
+                    style={{ width: '6rem' }}
+                  />
+                </td>
+                <td>
+                  <input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
+                </td>
+                <td>
+                  <input
+                    value={draft.lat}
+                    onChange={(e) => setDraft({ ...draft, lat: e.target.value })}
+                    style={{ width: '6rem' }}
+                  />{' '}
+                  <input
+                    value={draft.lon}
+                    onChange={(e) => setDraft({ ...draft, lon: e.target.value })}
+                    style={{ width: '6rem' }}
+                  />
+                </td>
+                <td>
+                  <input
+                    value={draft.elevationFt}
+                    onChange={(e) => setDraft({ ...draft, elevationFt: e.target.value })}
+                    style={{ width: '4.5rem' }}
+                  />
+                </td>
+                <td>
+                  <input
+                    value={draft.radiusNm}
+                    onChange={(e) => setDraft({ ...draft, radiusNm: e.target.value })}
+                    style={{ width: '3.5rem' }}
+                  />
+                </td>
+                <td>
+                  <input type="checkbox" checked={a.is_base === 1} onChange={() => void toggleBase(a)} />
+                </td>
+                <td className="row-actions">
+                  <button
+                    className="btn btn-primary small"
+                    onClick={() => void saveEdit(a)}
+                    disabled={!draft.code || !Number.isFinite(Number(draft.lat)) || !Number.isFinite(Number(draft.lon))}
+                  >
+                    Save
+                  </button>
+                  <button
+                    className="btn btn-ghost small"
+                    onClick={() => {
+                      setEditingId(null);
+                      setDraft(null);
+                    }}
+                  >
+                    Cancel
+                  </button>
+                </td>
+              </tr>
+            ) : (
+              <tr key={a.id}>
+                <td>
+                  <strong>{a.code}</strong>
+                </td>
+                <td>{a.name}</td>
+                <td className="mono">
+                  {a.lat.toFixed(4)}, {a.lon.toFixed(4)}
+                </td>
+                <td>{a.elevation_ft} ft</td>
+                <td>{a.radius_nm} nm</td>
+                <td>
+                  <input type="checkbox" checked={a.is_base === 1} onChange={() => void toggleBase(a)} />
+                </td>
+                <td className="row-actions">
+                  <button className="btn btn-ghost small" onClick={() => startEdit(a)}>
+                    Edit
+                  </button>
+                  <button
+                    className="btn btn-ghost small danger"
+                    onClick={() => window.confirm(`Delete ${a.code}?`) && void del(`/api/admin/airfields/${a.id}`).then(reload)}
+                  >
+                    Delete
+                  </button>
+                </td>
+              </tr>
+            )
+          )}
         </tbody>
       </table>
     </div>

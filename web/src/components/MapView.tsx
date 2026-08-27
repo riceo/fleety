@@ -92,8 +92,12 @@ function addAirfieldLayers(map: maplibregl.Map, accent: string): void {
         { 'font-scale': 0.8, 'text-font': ['literal', ['Noto Sans Regular']] },
       ],
       'text-size': ['case', ['==', ['get', 'isBase'], 1], 12, 10],
-      'text-offset': [0, 1.1],
-      'text-anchor': 'top',
+      // Variable anchors let the label slide to a free side instead of being
+      // dropped when an aircraft (symbol layers above win collisions) sits on
+      // top of the field — e.g. circuits directly over Stoke.
+      'text-variable-anchor': ['top', 'bottom', 'right', 'left'],
+      'text-radial-offset': 1.1,
+      'text-justify': 'auto',
       'text-optional': true,
       'text-font': ['Noto Sans Bold'],
       'text-max-width': 9,

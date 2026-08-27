@@ -33,5 +33,7 @@ COPY --from=webbuild /app/web/dist web/dist
 USER fleetview
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
-  CMD curl -fsS "http://localhost:${PORT:-8080}/healthz" || exit 1
-CMD ["node", "server/dist/index.js"]
+  CMD curl -fsS "http://localhost:8080/healthz" || exit 1
+# The in-container port is pinned: platform-injected PORT vars (Coolify sets
+# one from its UI) must not move the app away from the proxy/healthcheck target.
+CMD ["sh", "-c", "PORT=8080 exec node server/dist/index.js"]

@@ -58,6 +58,9 @@ export function FlightStrip({
             </span>
           </div>
         )}
+        {airborne && a.pos && Date.now() - a.pos.ts > 90_000 && (
+          <div className="strip-last mono-label">SIGNAL LOST · LAST FIX {fmtAgo(a.pos.ts).toUpperCase()}</div>
+        )}
         {!airborne && a.status === 'awake' && (
           <div className="strip-last mono-label">
             TRANSPONDER LIVE{a.pos ? ` · LAST FIX ${fmtAgo(a.pos.ts).toUpperCase()}` : ' · AWAITING POSITION'}

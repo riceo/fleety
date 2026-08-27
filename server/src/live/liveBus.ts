@@ -143,6 +143,16 @@ export class LiveBus {
     }
   }
 
+  // The detector closed a flight (landed / assumed / lost): without this, a
+  // coverage-gap flight that ends stays "airborne" forever on the board.
+  flightEnded(clubId: number, aircraftId: number, flightId: number): void {
+    const ch = this.channel(clubId);
+    const a = ch.aircraft.get(aircraftId);
+    if (!a || a.flightId !== flightId) return;
+    a.flightId = null;
+    if (!ch.dirty.has(aircraftId)) ch.dirty.set(aircraftId, null);
+  }
+
   // Transponder sighting (with or without a position). Live-state only.
   presence(clubId: number, aircraftId: number, ts: number): void {
     const ch = this.channel(clubId);
@@ -229,7 +239,10 @@ export class LiveBus {
   private computeStatus(a: LiveAircraft, now: number): LiveAircraft['status'] {
     const posAge = a.pos ? now - a.pos.ts : Infinity;
     const awakeAge = a.awakeTs !== null ? now - a.awakeTs : Infinity;
-    if (a.flightId !== null && posAge < AIRBORNE_FRESH_MS) return 'airborne';
+    // An open flight IS airborne, even through a coverage gap — the detector
+    // decides when it's over (and flightEnded() clears it here). The UI shows
+    // a SIGNAL LOST caveat when the fix is stale.
+    if (a.flightId !== null) return 'airborne';
     // A current fix outranks presence: richer information wins.
     if (posAge < AIRBORNE_FRESH_MS) return 'ground';
     // Transponder heard just now but no current fix: awake (FR24-style).

@@ -40,16 +40,21 @@ function BoardCard({ a, focused }: { a: LiveAircraft; focused: boolean }) {
         </div>
         {focused && a.description && <div className="board-card-desc">{a.description}</div>}
         {airborne && a.pos ? (
-          <div className="board-card-data">
-            <span>
-              <label>ALT</label>
-              {fmtAlt(a.pos.altBaro)}
-            </span>
-            <span>
-              <label>GS</label>
-              {fmtGs(a.pos.gs)}
-            </span>
-          </div>
+          <>
+            <div className="board-card-data">
+              <span>
+                <label>ALT</label>
+                {fmtAlt(a.pos.altBaro)}
+              </span>
+              <span>
+                <label>GS</label>
+                {fmtGs(a.pos.gs)}
+              </span>
+            </div>
+            {Date.now() - a.pos.ts > 90_000 && (
+              <div className="board-card-last mono-label">SIGNAL LOST · LAST FIX {fmtAgo(a.pos.ts).toUpperCase()}</div>
+            )}
+          </>
         ) : a.status === 'awake' ? (
           <div className="board-card-last mono-label">
             TRANSPONDER LIVE{a.pos ? ` · LAST FIX ${fmtAgo(a.pos.ts).toUpperCase()}` : ' · AWAITING POSITION'}

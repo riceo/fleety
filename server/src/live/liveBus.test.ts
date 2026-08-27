@@ -90,6 +90,19 @@ describe('LiveBus awake status', () => {
     expect(bus.list(1, 'member')[0].status).toBe('awake');
   });
 
+  it('an open flight stays airborne through a coverage gap until the detector closes it', () => {
+    const bus = new LiveBus();
+    bus.syncAircraftList(1, [row(1)]);
+    bus.update(1, 1, pos(now - 20 * 60_000), 77); // fix 20 min old, flight open
+    bus.refreshStatuses(now);
+    expect(bus.list(1, 'member')[0].status).toBe('airborne'); // in flight, signal lost
+    bus.flightEnded(1, 1, 77);
+    bus.refreshStatuses(now);
+    expect(bus.list(1, 'member')[0].status).toBe('ground'); // stale fix, flight over
+    bus.refreshStatuses(now + 40 * 60_000);
+    expect(bus.list(1, 'member')[0].status).toBe('offline');
+  });
+
   it('presence is monotonic and members-only aircraft never reach restricted audiences', () => {
     const bus = new LiveBus();
     bus.syncAircraftList(1, [row(1, { visibility: 'members' })]);

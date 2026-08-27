@@ -33,6 +33,7 @@ async function main() {
     },
     onFlightEnded: (flightId, aircraft) => {
       onLanding(db, flightId, aircraft.id, emitTicker);
+      live.flightEnded(aircraft.club_id, aircraft.id, flightId);
     },
   });
 

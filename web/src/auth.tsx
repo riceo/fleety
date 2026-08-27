@@ -8,6 +8,14 @@ function applyTheme(config: AppConfig): void {
   document.documentElement.setAttribute('data-theme', config.theme ?? 'ops');
   if (config.accent) document.documentElement.style.setProperty('--accent', config.accent);
   document.title = config.siteName ?? 'Fleety';
+  // Tag analytics events with the club so PostHog can segment per tenant.
+  try {
+    (window as unknown as { posthog?: { register: (p: Record<string, string>) => void } }).posthog?.register({
+      club: config.clubSlug ?? 'platform',
+    });
+  } catch {
+    /* analytics unavailable */
+  }
 }
 
 interface AuthState {

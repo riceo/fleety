@@ -1151,6 +1151,110 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     return { ok: true };
   });
 
+  // ---------- SPA shell with social/SEO meta ----------
+
+  const escapeHtml = (s: string) =>
+    s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+  interface ShellMeta {
+    title: string;
+    description: string;
+    image: string | null;
+    url: string;
+    noindex: boolean;
+  }
+
+  // Social scrapers (WhatsApp, iMessage, Twitter…) don't run JS, so share
+  // previews must be baked into the HTML per club — and per aircraft for
+  // deep links on public clubs.
+  const renderShell = (reply: FastifyReply, meta: ShellMeta) => {
+    let html: string;
+    try {
+      html = fs.readFileSync(path.join(deps.webDist, 'index.html'), 'utf8');
+    } catch {
+      return reply.code(404).send({ error: 'not_found' });
+    }
+    const tags = [
+      `<meta name="description" content="${escapeHtml(meta.description)}" />`,
+      `<meta property="og:site_name" content="Fleety" />`,
+      `<meta property="og:type" content="website" />`,
+      `<meta property="og:title" content="${escapeHtml(meta.title)}" />`,
+      `<meta property="og:description" content="${escapeHtml(meta.description)}" />`,
+      `<meta property="og:url" content="${escapeHtml(meta.url)}" />`,
+      `<link rel="canonical" href="${escapeHtml(meta.url)}" />`,
+      `<meta name="twitter:card" content="${meta.image ? 'summary_large_image' : 'summary'}" />`,
+      `<meta name="twitter:title" content="${escapeHtml(meta.title)}" />`,
+      `<meta name="twitter:description" content="${escapeHtml(meta.description)}" />`,
+      ...(meta.image
+        ? [
+            `<meta property="og:image" content="${escapeHtml(meta.image)}" />`,
+            `<meta name="twitter:image" content="${escapeHtml(meta.image)}" />`,
+          ]
+        : []),
+      ...(meta.noindex ? [`<meta name="robots" content="noindex" />`] : []),
+    ].join('\n    ');
+    html = html
+      .replace(/<title>[\s\S]*?<\/title>/, `<title>${escapeHtml(meta.title)}</title>`)
+      .replace(/<!--fleety:meta-->[\s\S]*?<!--\/fleety:meta-->/, tags);
+    return reply.type('text/html').header('Cache-Control', 'no-cache').send(html);
+  };
+
+  const baseUrl = (req: FastifyRequest) => `${req.protocol}://${req.headers.host ?? config.baseDomain}`;
+
+  const shellMetaFor = (req: FastifyRequest): ShellMeta => {
+    const club = req.club;
+    if (!club) {
+      return {
+        title: 'Fleety — live ops boards for flying clubs',
+        description:
+          'Your club’s aircraft, live on a board built for the clubhouse — flight history, departures ticker and kiosk mode.',
+        image: null,
+        url: `${baseUrl(req)}/`,
+        noindex: false,
+      };
+    }
+    return {
+      title: `${club.name} — live ops board`,
+      description: `Live fleet tracking for ${club.name}: who's in the air right now, flight history, and the clubhouse departures ticker. Powered by Fleety.`,
+      image: club.logo_path ? `${baseUrl(req)}/uploads/${club.logo_path}` : null,
+      url: `${baseUrl(req)}${req.url.split('?')[0]}`,
+      noindex: club.public_mode !== 1,
+    };
+  };
+
+  app.get('/', async (req, reply) => renderShell(reply, shellMetaFor(req)));
+
+  // Deep link to one aircraft: /ac/G-PSZB (or its callsign). Aircraft details
+  // only appear in the preview when the club is public AND the aircraft is
+  // public-visibility — a shared private-club link reveals nothing.
+  app.get('/ac/:reg', async (req, reply) => {
+    const club = req.club;
+    const reg = String((req.params as { reg: string }).reg ?? '').trim();
+    const meta = shellMetaFor(req);
+    // Until the aircraft qualifies for a rich preview, the canonical URL is
+    // the club root — private-club deep links echo nothing back.
+    meta.url = `${baseUrl(req)}/`;
+    if (club && club.public_mode === 1 && reg) {
+      const ac = db
+        .prepare(
+          `SELECT registration, callsign, type_name, nickname, description, photo_path FROM aircraft
+           WHERE club_id = ? AND deleted_at IS NULL AND visibility = 'public'
+             AND (registration = ? COLLATE NOCASE OR callsign = ? COLLATE NOCASE)`
+        )
+        .get(club.id, reg, reg) as
+        | { registration: string; callsign: string; type_name: string; nickname: string; description: string; photo_path: string | null }
+        | undefined;
+      if (ac) {
+        const label = ac.callsign || ac.registration;
+        meta.title = `${label} · ${ac.registration} — live on ${club.name}`;
+        meta.description = ac.description || `${ac.nickname || ac.type_name} — track it live on the ${club.name} ops board.`;
+        meta.url = `${baseUrl(req)}/ac/${encodeURIComponent(ac.registration)}`;
+        if (ac.photo_path) meta.image = `${baseUrl(req)}/uploads/${ac.photo_path}`;
+      }
+    }
+    return renderShell(reply, meta);
+  });
+
   // ---------- health + SPA ----------
 
   app.get('/healthz', async (_req, reply) => {
@@ -1189,10 +1293,7 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     ) {
       return reply.code(404).send({ error: 'not_found' });
     }
-    return reply
-      .type('text/html')
-      .header('Cache-Control', 'no-cache')
-      .send(fs.readFileSync(path.join(deps.webDist, 'index.html')));
+    return renderShell(reply, shellMetaFor(req));
   });
 
   return app;

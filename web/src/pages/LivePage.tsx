@@ -1,5 +1,5 @@
-import { useMemo, useRef, useState } from 'react';
-import { Link, Navigate } from 'react-router-dom';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Link, Navigate, useParams } from 'react-router-dom';
 import { useAuth } from '../auth';
 import { useLiveFleet } from '../live';
 import { MapView, type MapViewHandle } from '../components/MapView';
@@ -12,11 +12,33 @@ import { LandingPage } from './PlatformPage';
 
 export function LivePage() {
   const { me, config, loading } = useAuth();
+  const { reg: deepLinkReg } = useParams();
   const live = useLiveFleet(!loading && !!config);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [following, setFollowing] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [shared, setShared] = useState(false);
+  const deepLinkDone = useRef(false);
   const mapRef = useRef<MapViewHandle>(null);
+
+  // Deep link (/ac/G-PSZB or /ac/INV09): select and follow the aircraft once
+  // the fleet arrives.
+  useEffect(() => {
+    if (!deepLinkReg || deepLinkDone.current || live.fleet.length === 0) return;
+    const want = deepLinkReg.trim().toUpperCase();
+    const target = live.fleet.find(
+      (a) =>
+        a.registration.toUpperCase() === want ||
+        a.callsign.toUpperCase() === want ||
+        (a.liveCallsign ?? '').toUpperCase() === want
+    );
+    deepLinkDone.current = true;
+    if (target) {
+      setSelectedId(target.id);
+      mapRef.current?.flyToAircraft(target.id);
+      if (target.status === 'airborne') setFollowing(true);
+    }
+  }, [deepLinkReg, live.fleet]);
 
   const selected = useMemo(() => live.fleet.find((a) => a.id === selectedId) ?? null, [live.fleet, selectedId]);
   const airborneCount = live.fleet.filter((a) => a.status === 'airborne').length;
@@ -35,7 +57,34 @@ export function LivePage() {
   const select = (id: number | null) => {
     setSelectedId(id);
     setFollowing(false);
-    if (id !== null) mapRef.current?.flyToAircraft(id);
+    setShared(false);
+    // The address bar is the share link.
+    if (id !== null) {
+      const a = live.fleet.find((x) => x.id === id);
+      if (a) window.history.replaceState(null, '', `/ac/${encodeURIComponent(a.registration)}`);
+      mapRef.current?.flyToAircraft(id);
+    } else {
+      window.history.replaceState(null, '', '/');
+    }
+  };
+
+  const share = async (registration: string, label: string) => {
+    const url = `${window.location.origin}/ac/${encodeURIComponent(registration)}`;
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: `${label} — ${config?.siteName ?? 'Fleety'}`, url });
+        return;
+      }
+    } catch {
+      /* user dismissed the share sheet */
+    }
+    try {
+      await navigator.clipboard.writeText(url);
+      setShared(true);
+      setTimeout(() => setShared(false), 2000);
+    } catch {
+      window.prompt('Copy link:', url);
+    }
   };
 
   return (
@@ -141,6 +190,17 @@ export function LivePage() {
                     FLIGHT SO FAR
                   </Link>
                 )}
+                <button
+                  className="btn btn-ghost small"
+                  onClick={() =>
+                    void share(
+                      selected.registration,
+                      displayCallsign(selected.callsign) || selected.registration
+                    )
+                  }
+                >
+                  {shared ? 'LINK COPIED ✓' : 'SHARE'}
+                </button>
               </div>
             </div>
           )}

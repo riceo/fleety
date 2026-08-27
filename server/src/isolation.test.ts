@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import type { Database } from 'better-sqlite3';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { openTestDb } from './db/index.js';
 import { buildServer } from './server.js';
 import { Settings } from './settings.js';
@@ -74,7 +77,13 @@ async function build(): Promise<World> {
   const clubs = new Clubs(db);
   const detector = new FlightDetector(db);
   const poller = new Poller(db, { name: 'test', fetchPositions: async () => [] }, settings, detector, live);
-  const app = await buildServer({ db, settings, live, poller, detector, clubs, webDist: '/tmp' });
+  // Stub SPA shell so the meta-injection routes have something to template.
+  const webDist = fs.mkdtempSync(path.join(os.tmpdir(), 'fleety-test-'));
+  fs.writeFileSync(
+    path.join(webDist, 'index.html'),
+    '<html><head><title>Fleety</title>\n<!--fleety:meta--><meta name="description" content="stub" /><!--/fleety:meta-->\n</head><body></body></html>'
+  );
+  const app = await buildServer({ db, settings, live, poller, detector, clubs, webDist });
 
   return {
     db,
@@ -188,6 +197,36 @@ describe('tenant isolation', () => {
     expect(meA.json().user.role).toBe('admin');
     const meB = await w.app.inject({ url: '/api/me', headers: { ...HOST_B, cookie } });
     expect(meB.json().user.role).toBeNull();
+  });
+
+  it('share previews: club meta on subdomains, aircraft details only when public', async () => {
+    // Private club: branded but noindexed, and deep links reveal nothing.
+    const priv = await w.app.inject({ url: '/', headers: HOST_A });
+    expect(priv.body).toContain('ALPHA — live ops board');
+    expect(priv.body).toContain('name="robots" content="noindex"');
+    const privAc = await w.app.inject({ url: '/ac/G-AAAA', headers: HOST_A });
+    expect(privAc.body).not.toContain('G-AAAA');
+
+    // Public club: indexed, and public aircraft get rich previews.
+    w.db.prepare('UPDATE clubs SET public_mode = 1 WHERE id = ?').run(w.clubA);
+    w.db
+      .prepare(
+        "INSERT INTO aircraft (club_id, hex, registration, callsign, type_name, description, visibility, created_at, updated_at) VALUES (?, 'dddddd', 'G-SHRE', 'INV99', 'Cessna 172', '4-seat tourer', 'public', 0, 0)"
+      )
+      .run(w.clubA);
+    w.clubs.reload();
+    const pub = await w.app.inject({ url: '/', headers: HOST_A });
+    expect(pub.body).not.toContain('noindex');
+    const pubAc = await w.app.inject({ url: '/ac/G-SHRE', headers: HOST_A });
+    expect(pubAc.body).toContain('INV99');
+    expect(pubAc.body).toContain('4-seat tourer');
+    // Members-only aircraft stay out of previews even on public clubs.
+    const memAc = await w.app.inject({ url: '/ac/G-AAAA', headers: HOST_A });
+    expect(memAc.body).not.toContain('G-AAAA');
+
+    // Apex: platform landing meta.
+    const apex = await w.app.inject({ url: '/', headers: { host: 'fleety.live' } });
+    expect(apex.body).toContain('live ops boards for flying clubs');
   });
 
   it('platform admin flag is manageable but the last one is protected', async () => {

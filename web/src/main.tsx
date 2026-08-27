@@ -23,6 +23,7 @@ import './styles.css';
 
 const router = createBrowserRouter([
   { path: '/', element: <LivePage /> },
+  { path: '/ac/:reg', element: <LivePage /> },
   { path: '/login', element: <LoginPage /> },
   { path: '/set-password', element: <SetPasswordPage /> },
   { path: '/history', element: <HistoryPage /> },

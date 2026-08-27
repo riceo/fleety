@@ -37,7 +37,7 @@ export function FlightStrip({
       )}
       <div className="strip-body">
         <div className="strip-top">
-          <span className="strip-callsign">{displayCallsign((airborne && a.liveCallsign) || a.callsign) || a.registration}</span>
+          <span className="strip-callsign">{displayCallsign(a.callsign || (airborne ? a.liveCallsign : null)) || a.registration}</span>
           <StatusBadge status={a.status} />
         </div>
         <div className="strip-meta">

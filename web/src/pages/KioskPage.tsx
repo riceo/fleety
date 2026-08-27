@@ -32,7 +32,7 @@ function BoardCard({ a, focused }: { a: LiveAircraft; focused: boolean }) {
       {a.photoUrl && <div className="board-card-photo" style={{ backgroundImage: `url(${a.photoUrl})` }} />}
       <div className="board-card-content">
         <div className="board-card-head">
-          <span className="board-callsign">{displayCallsign((airborne && a.liveCallsign) || a.callsign) || a.registration}</span>
+          <span className="board-callsign">{displayCallsign(a.callsign || (airborne ? a.liveCallsign : null)) || a.registration}</span>
           <StatusBadge status={a.status} />
         </div>
         <div className="mono-label">

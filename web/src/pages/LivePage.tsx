@@ -148,7 +148,7 @@ export function LivePage() {
               )}
               <div className="target-id">
                 <span className="target-callsign">
-                  {displayCallsign((selected.status === 'airborne' && selected.liveCallsign) || selected.callsign) ||
+                  {displayCallsign(selected.callsign || (selected.status === 'airborne' ? selected.liveCallsign : null)) ||
                     selected.registration}
                 </span>
                 <StatusBadge status={selected.status} />

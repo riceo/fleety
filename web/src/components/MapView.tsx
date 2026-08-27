@@ -391,7 +391,7 @@ export const MapView = forwardRef<MapViewHandle, Props>(function MapView(
         // callsign (spoken form) — matching the strips — then registration.
         const label =
           a.status === 'airborne'
-            ? displayCallsign(a.liveCallsign ?? a.callsign) || a.registration
+            ? displayCallsign(a.callsign || a.liveCallsign) || a.registration
             : a.registration;
         return {
           type: 'Feature' as const,

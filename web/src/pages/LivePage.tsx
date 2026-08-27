@@ -7,6 +7,7 @@ import { FleetPanel, StatusBadge } from '../components/FleetPanel';
 import { TopBar } from '../components/TopBar';
 import { Ticker } from '../components/Ticker';
 import { displayCallsign, fmtAgo, fmtAlt, fmtGs } from '../format';
+import { useEventSound } from '../sound';
 
 export function LivePage() {
   const { me, config, loading } = useAuth();
@@ -18,6 +19,7 @@ export function LivePage() {
 
   const selected = useMemo(() => live.fleet.find((a) => a.id === selectedId) ?? null, [live.fleet, selectedId]);
   const airborneCount = live.fleet.filter((a) => a.status === 'airborne').length;
+  const [soundOn, toggleSound] = useEventSound('fv_sound_live', false, live.tickerEvent);
 
   if (!loading && me && !me.user && !me.kiosk && !me.publicMode) {
     return <Navigate to="/login" replace />;
@@ -40,6 +42,13 @@ export function LivePage() {
           <div className="sidebar-head">
             <span className={`conn-dot ${live.connected ? 'ok' : 'bad'}`} />
             <span className="mono-label">{live.connected ? 'FEED ACTIVE' : 'RECONNECTING'}</span>
+            <button
+              className="btn btn-ghost small"
+              onClick={toggleSound}
+              title="Ping on departures and landings"
+            >
+              {soundOn ? '🔔 ON' : '🔕 OFF'}
+            </button>
             <button className="btn btn-ghost small" onClick={() => mapRef.current?.fitFleet()}>
               FIT
             </button>

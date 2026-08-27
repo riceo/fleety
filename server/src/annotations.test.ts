@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { openTestDb } from './db/index.js';
-import { activeNotes, onLanding, onTakeoff, tickerItems } from './annotations.js';
+import { activeNotes, onLanding, onTakeoff, postTickerMessage, tickerItems } from './annotations.js';
 
 function setup() {
   const db = openTestDb();
@@ -61,6 +61,14 @@ describe('kiosk annotations', () => {
     expect(tickerItems(db, 'member').some((t) => t.text.includes('HAS DEPARTED'))).toBe(true);
     expect(tickerItems(db, 'restricted')).toHaveLength(0);
     expect(tickerItems(db, 'member').some((t) => t.text.includes('AEROBATIC SHIP — WHERE NEXT?'))).toBe(true);
+  });
+
+  it('custom ticker broadcasts reach everyone and can be emitted live', () => {
+    const { db } = setup();
+    const emitted: { text: string; visibility: string }[] = [];
+    postTickerMessage(db, 'BBQ at the clubhouse Saturday!', (ev) => emitted.push(ev));
+    expect(tickerItems(db, 'restricted').some((t) => t.text.includes('BBQ at the clubhouse'))).toBe(true);
+    expect(emitted[0].visibility).toBe('public');
   });
 
   it('timed notes expire on their own', () => {

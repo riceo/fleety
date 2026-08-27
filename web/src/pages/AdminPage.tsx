@@ -732,6 +732,70 @@ interface Annotation {
   callsign: string;
 }
 
+interface TickerEventRow {
+  id: number;
+  ts: number;
+  text: string;
+  registration: string | null;
+}
+
+function TickerBroadcast() {
+  const [data, reload] = useData<{ events: TickerEventRow[] }>('/api/admin/ticker');
+  const [text, setText] = useState('');
+
+  const send = async () => {
+    await post('/api/admin/ticker', { text });
+    setText('');
+    reload();
+  };
+
+  return (
+    <section className="setting-block">
+      <h3>Ticker broadcast</h3>
+      <p className="muted small">
+        Put any message straight on the tape — it shows for six hours (delete it early below). Departures and
+        landings appear here too and can be removed if the detector got one wrong.
+      </p>
+      <div className="form-row">
+        <label style={{ flex: 1 }}>
+          Message
+          <input
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            placeholder="BBQ at the clubhouse this Saturday — all welcome!"
+            maxLength={200}
+            onKeyDown={(e) => e.key === 'Enter' && text.trim() && void send()}
+          />
+        </label>
+        <button className="btn btn-primary" onClick={() => void send()} disabled={!text.trim()}>
+          Post to ticker
+        </button>
+      </div>
+      {data && data.events.length > 0 && (
+        <table className="table">
+          <tbody>
+            {data.events.slice(0, 12).map((e) => (
+              <tr key={e.id}>
+                <td className="mono">{fmtDateTime(e.ts)}</td>
+                <td>{e.text}</td>
+                <td className="muted">{e.registration ?? 'broadcast'}</td>
+                <td className="row-actions">
+                  <button
+                    className="btn btn-ghost small danger"
+                    onClick={() => void del(`/api/admin/ticker/${e.id}`).then(reload)}
+                  >
+                    Delete
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+  );
+}
+
 export function MessagesAdmin() {
   const [data, reload] = useData<{ annotations: Annotation[] }>('/api/admin/annotations');
   const [aircraft, setAircraft] = useState<{ id: number; registration: string; callsign: string }[]>([]);
@@ -768,10 +832,11 @@ export function MessagesAdmin() {
 
   return (
     <div>
-      <h1>Kiosk messages</h1>
+      <h1>Messages & ticker</h1>
+      <TickerBroadcast />
       <p className="muted small">
-        Shown on the big screen next to the aircraft and scrolled across the ticker — e.g. “PAX: Bob and Jess
-        experience flight”. “Next flight” messages arm on take-off and clear automatically at landing.
+        Aircraft messages are shown on the board next to the aircraft and scrolled across the ticker — e.g. “PAX:
+        Bob and Jess experience flight”. “Next flight” messages arm on take-off and clear automatically at landing.
       </p>
       <div className="setting-block form-grid">
         <div className="form-row">

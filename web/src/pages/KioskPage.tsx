@@ -7,6 +7,7 @@ import { StatusBadge } from '../components/FleetPanel';
 import { Ticker } from '../components/Ticker';
 import { DEFAULT_LOGO } from '../components/TopBar';
 import { displayCallsign, fmtAgo, fmtAlt, fmtGs, fmtTime, fmtTimeUTC } from '../format';
+import { useEventSound } from '../sound';
 
 function webglAvailable(): boolean {
   try {
@@ -69,6 +70,9 @@ export function KioskPage() {
   const [focusIdx, setFocusIdx] = useState(0);
   const [eventFocusId, setEventFocusId] = useState<number | null>(null);
   const eventFocusUntil = useRef(0);
+  // TV pings on departures/landings by default; run Chromium with
+  // --autoplay-policy=no-user-gesture-required so it works without a click.
+  const [soundOn, toggleSound] = useEventSound('fv_sound_kiosk', true, live.tickerEvent);
 
   // Exchange the ?token= for a kiosk session cookie, then strip it from the
   // URL so it never shows on screen or in referrers.
@@ -169,7 +173,7 @@ export function KioskPage() {
           <img src={config.logoUrl || DEFAULT_LOGO} alt="" className="brand-logo" />
           <span className="brand-name">
             {config.siteName.toUpperCase()}
-            <span className="brand-sub">OPERATIONS BOARD · KENT</span>
+            <span className="brand-sub">OPERATIONS BOARD</span>
           </span>
         </div>
         <div className="kiosk-status">
@@ -183,6 +187,9 @@ export function KioskPage() {
           )}
         </div>
         <div className="kiosk-clocks">
+          <button className="btn btn-ghost small kiosk-sound" onClick={toggleSound} title="Event sounds">
+            {soundOn ? '🔔' : '🔕'}
+          </button>
           <div>
             <label>UTC</label>
             <span>{fmtTimeUTC(clock)}</span>

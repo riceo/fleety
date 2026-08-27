@@ -45,11 +45,18 @@ function aircraftInfo(db: Database, aircraftId: number) {
     .get(aircraftId) as { registration: string; callsign: string; visibility: 'public' | 'members' } | undefined;
 }
 
-function writeEvent(db: Database, aircraftId: number, text: string, emit?: TickerEmit): void {
+function writeEvent(db: Database, aircraftId: number | null, text: string, emit?: TickerEmit): void {
   const ts = Date.now();
   db.prepare('INSERT INTO ticker_events (ts, aircraft_id, text) VALUES (?, ?, ?)').run(ts, aircraftId, text);
-  const ac = aircraftInfo(db, aircraftId);
-  emit?.({ ts, text, aircraftId, visibility: ac?.visibility ?? 'members' });
+  // Custom broadcasts (no aircraft) are for everyone; aircraft events follow
+  // the aircraft's visibility.
+  const ac = aircraftId !== null ? aircraftInfo(db, aircraftId) : null;
+  emit?.({ ts, text, aircraftId, visibility: aircraftId === null ? 'public' : (ac?.visibility ?? 'members') });
+}
+
+// Admin-typed message straight onto the tape ("BBQ AT THE CLUBHOUSE SATURDAY").
+export function postTickerMessage(db: Database, text: string, emit?: TickerEmit): void {
+  writeEvent(db, null, text.trim(), emit);
 }
 
 // Take-off: arm pending next-flight notes and write the departure ticker line,
@@ -105,11 +112,12 @@ export interface TickerItem {
 export function tickerItems(db: Database, audience: 'member' | 'restricted', now = Date.now()): TickerItem[] {
   const visFilter = audience === 'member' ? '' : " AND a.visibility = 'public'";
 
+  const eventVis = audience === 'member' ? '' : " AND (e.aircraft_id IS NULL OR a.visibility = 'public')";
   const events = db
     .prepare(
       `SELECT e.ts, e.text, e.aircraft_id AS aircraftId FROM ticker_events e
-       JOIN aircraft a ON a.id = e.aircraft_id
-       WHERE e.ts > ?${visFilter} ORDER BY e.ts DESC LIMIT 20`
+       LEFT JOIN aircraft a ON a.id = e.aircraft_id
+       WHERE e.ts > ?${eventVis} ORDER BY e.ts DESC LIMIT 20`
     )
     .all(now - 6 * 3600 * 1000) as TickerItem[];
 

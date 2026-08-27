@@ -355,7 +355,7 @@ label.check {
   padding: 0.65rem 0.9rem;
   border-bottom: 1px solid var(--line);
 }
-.sidebar-head .btn {
+.sidebar-head .btn:first-of-type {
   margin-left: auto;
 }
 .conn-dot {
@@ -722,6 +722,7 @@ label.check {
   font-size: 0.82rem;
   letter-spacing: 0.06em;
   font-variant-numeric: tabular-nums;
+  text-transform: uppercase;
 }
 .ticker-board .ticker-inner span {
   font-size: 1.15rem;
@@ -1025,6 +1026,10 @@ label.check {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
+}
+.kiosk-sound {
+  align-self: center;
+  font-size: 1rem;
 }
 .kiosk-clocks label {
   font-size: 0.55rem;

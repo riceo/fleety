@@ -102,7 +102,9 @@ export class LiveBus {
       altBaro: p.altBaro,
       altGeom: p.altGeom,
       gs: p.gs,
-      track: p.track,
+      // A fix without track keeps the last known heading, so the map icon
+      // never snaps back to pointing north mid-flight.
+      track: p.track ?? a.pos?.track ?? null,
       baroRate: p.baroRate,
       squawk: p.squawk,
       onGround: p.onGround,

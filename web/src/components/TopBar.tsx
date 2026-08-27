@@ -12,7 +12,7 @@ export function Brand({ siteName, logoUrl }: { siteName: string; logoUrl?: strin
       <img src={logoUrl || DEFAULT_LOGO} alt="" className="brand-logo" />
       <span className="brand-name">
         {siteName.toUpperCase()}
-        <span className="brand-sub">OPERATIONS BOARD · KENT</span>
+        <span className="brand-sub">OPERATIONS BOARD</span>
       </span>
     </Link>
   );

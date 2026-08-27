@@ -26,7 +26,7 @@ import {
   resolveSession,
 } from './auth/sessions.js';
 import { dbFileSizeBytes } from './db/index.js';
-import { tickerItems } from './annotations.js';
+import { postTickerMessage, tickerItems } from './annotations.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -782,6 +782,35 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     });
     del();
     audit(req, 'flight.delete', String(id));
+    return { ok: true };
+  });
+
+  // ---- ticker broadcasts (custom messages on the tape) ----
+
+  app.get('/api/admin/ticker', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return;
+    return {
+      events: db
+        .prepare(
+          `SELECT e.id, e.ts, e.text, a.registration FROM ticker_events e
+           LEFT JOIN aircraft a ON a.id = e.aircraft_id ORDER BY e.ts DESC LIMIT 30`
+        )
+        .all(),
+    };
+  });
+
+  app.post('/api/admin/ticker', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return;
+    const { text } = (req.body ?? {}) as { text?: string };
+    if (!text?.trim() || text.trim().length > 200) return reply.code(400).send({ error: 'invalid_text' });
+    postTickerMessage(db, text.trim(), (ev) => live.broadcastTicker(ev));
+    audit(req, 'ticker.post', text.trim().slice(0, 80));
+    return { ok: true };
+  });
+
+  app.delete('/api/admin/ticker/:id', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return;
+    db.prepare('DELETE FROM ticker_events WHERE id = ?').run(Number((req.params as { id: string }).id));
     return { ok: true };
   });
 

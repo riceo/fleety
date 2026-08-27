@@ -31,7 +31,7 @@ import {
 import { dbFileSizeBytes } from './db/index.js';
 import { postTickerMessage, tickerItems, type TickerEmit } from './annotations.js';
 import { Clubs, type ClubRow } from './clubs.js';
-import { emailConfigured, sendInviteEmail, sendResetEmail } from './email.js';
+import { emailConfigured, sendInviteEmail, sendResetEmail, sendWaitlistNotification } from './email.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -297,6 +297,37 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
       callsignRules: clubs.rules(club),
     };
   });
+
+  // Public waitlist signup from the fleety.live landing page. Idempotent and
+  // deliberately quiet about whether an email was already on the list; the
+  // operator ping only fires for genuinely new rows.
+  app.post(
+    '/api/waitlist',
+    { config: { rateLimit: { max: 5, timeWindow: '1 minute' } } },
+    async (req, reply) => {
+      const { email, marketing } = (req.body ?? {}) as { email?: string; marketing?: boolean };
+      const clean = (email ?? '').trim().toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean) || clean.length > 254) {
+        return reply.code(400).send({ error: 'invalid_email' });
+      }
+      const existing = db.prepare('SELECT id FROM waitlist WHERE email = ?').get(clean) as
+        | { id: number }
+        | undefined;
+      if (!existing) {
+        db.prepare('INSERT INTO waitlist (email, marketing_opt_in, created_at, source) VALUES (?, ?, ?, ?)').run(
+          clean,
+          marketing ? 1 : 0,
+          Date.now(),
+          req.headers.host ?? ''
+        );
+        void sendWaitlistNotification(clean, !!marketing);
+      } else if (marketing) {
+        // Re-signup with the box ticked upgrades consent; never downgrades.
+        db.prepare('UPDATE waitlist SET marketing_opt_in = 1 WHERE id = ?').run(existing.id);
+      }
+      return { ok: true };
+    }
+  );
 
   app.get('/api/state', async (req, reply) => {
     const club = clubOf(req, reply);
@@ -1149,6 +1180,15 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     if (res.changes === 0) return reply.code(404).send({ error: 'not_found' });
     audit(req, 'platform.admin_flag', `${id} -> ${platformAdmin}`);
     return { ok: true };
+  });
+
+  app.get('/api/platform/waitlist', async (req, reply) => {
+    if (!requirePlatform(req, reply)) return;
+    return {
+      signups: db
+        .prepare('SELECT id, email, marketing_opt_in, created_at, source FROM waitlist ORDER BY created_at DESC')
+        .all(),
+    };
   });
 
   // The ADSBx rescue tier is platform infrastructure billed to the platform,

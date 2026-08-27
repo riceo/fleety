@@ -6,22 +6,138 @@ import { FleetyMark, TopBar } from '../components/TopBar';
 import { fmtAgo } from '../format';
 
 // Apex-domain landing (no club subdomain matched).
+
+const FEATURES: { title: string; body: string }[] = [
+  {
+    title: 'Live ops board',
+    body: "Your fleet on a dark ops-room map at your club's own address, updating in real time from ADS-B — including aircraft the public trackers have delisted.",
+  },
+  {
+    title: 'Fully customisable',
+    body: 'Your colours, your logo, your board name and subheading — plus curated themes from ops-dark to heritage to daylight. It looks like YOUR club, not our product.',
+  },
+  {
+    title: 'Clubhouse kiosk',
+    body: 'A full-screen mode built for the coffee-shop TV: aircraft photo cards, a departures ticker, event pings, and the board snaps to whatever is flying.',
+  },
+  {
+    title: 'Flight history & replay',
+    body: 'Every flight recorded from first fix to landing, with honest coverage-gap handling — then replayable on the map with a time slider.',
+  },
+  {
+    title: 'Members & guests',
+    body: 'Run the board public or members-only, set visibility per aircraft, and add temporary guest aircraft that can auto-expire — or stay forever.',
+  },
+  {
+    title: 'Resilient data',
+    body: 'Positions blend multiple ADS-B networks with automatic failover, dead-reckoning between pings, and an optional paid rescue tier for coverage blackspots.',
+  },
+];
+
+function WaitlistForm() {
+  const [email, setEmail] = useState('');
+  const [marketing, setMarketing] = useState(false);
+  const [state, setState] = useState<'idle' | 'busy' | 'done' | 'error'>('idle');
+
+  const join = async () => {
+    setState('busy');
+    try {
+      await post('/api/waitlist', { email, marketing });
+      setState('done');
+    } catch {
+      setState('error');
+    }
+  };
+
+  if (state === 'done') {
+    return (
+      <div className="waitlist-done">
+        <p className="mono-label">YOU'RE ON THE LIST ✓</p>
+        <p className="muted small">We'll be in touch when we're ready for your club.</p>
+      </div>
+    );
+  }
+  return (
+    <>
+      <div className="waitlist-row">
+        <input
+          type="email"
+          placeholder="you@yourclub.co.uk"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && email.includes('@') && void join()}
+        />
+        <button className="btn btn-primary" onClick={() => void join()} disabled={state === 'busy' || !email.includes('@')}>
+          {state === 'busy' ? 'Joining…' : 'Join the waitlist'}
+        </button>
+      </div>
+      <label className="check waitlist-optin">
+        <input type="checkbox" checked={marketing} onChange={(e) => setMarketing(e.target.checked)} />
+        Also email me occasional Fleety product updates (optional — you can unsubscribe any time)
+      </label>
+      {state === 'error' && <p className="form-error">That didn't work — check the address and try again.</p>}
+    </>
+  );
+}
+
 export function LandingPage() {
   return (
-    <div className="login-page">
-      <div className="login-card landing-card">
-        <div className="brand">
-          <FleetyMark />
-          <span className="brand-name">
-            FLEETY
-            <span className="brand-sub">LIVE OPS BOARDS FOR FLYING CLUBS</span>
-          </span>
-        </div>
-        <p className="muted center">
-          Your club's aircraft, live on a board built for the clubhouse — flight history, departures ticker,
-          kiosk mode and more. Each club flies at its own address.
-        </p>
-        <p className="mono-label center">yourclub.fleety.live</p>
+    <div className="landing">
+      <div className="landing-inner">
+        <header className="landing-hero">
+          <div className="brand">
+            <FleetyMark />
+            <span className="brand-name">
+              FLEETY
+              <span className="brand-sub">LIVE OPS BOARDS FOR FLYING CLUBS</span>
+            </span>
+          </div>
+          <h1>Your club's aircraft, live on a board built for the clubhouse.</h1>
+          <p className="muted">
+            Fleet tracking, flight history and a departures ticker — in your club's colours, on the clubhouse
+            TV, at your club's own address.
+          </p>
+          <p className="mono-label landing-domain">yourclub.fleety.live</p>
+        </header>
+
+        <section className="landing-features">
+          {FEATURES.map((f) => (
+            <div className="landing-feature" key={f.title}>
+              <h3 className="mono-label">{f.title.toUpperCase()}</h3>
+              <p>{f.body}</p>
+            </div>
+          ))}
+        </section>
+
+        <section className="landing-waitlist">
+          <h2>Get your club on the board</h2>
+          <p className="muted small">
+            Fleety is onboarding clubs gradually. Leave your email and we'll get in touch — we only use it to
+            talk to you about getting set up.
+          </p>
+          <WaitlistForm />
+        </section>
+
+        <footer className="landing-footer">
+          <p className="landing-love">
+            Built with <span aria-hidden="true">♥</span> by{' '}
+            <a href="https://astramesa.com" target="_blank" rel="noreferrer">
+              AstraMesa
+            </a>
+          </p>
+          <p className="muted small">
+            Fleety is operated by AstraMesa, a trading name of Platformation Ltd, registered in England and
+            Wales, company no. 10414067. Registered office: 20-22 Wenlock Road, London, England, N1 7GU.
+            Contact: <a href="mailto:ops@fleety.live">ops@fleety.live</a>.
+          </p>
+          <p className="muted small">
+            <a href="/cookies">Cookie policy</a> · Map data ©{' '}
+            <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">
+              OpenStreetMap
+            </a>{' '}
+            contributors · ADS-B data via adsb.lol
+          </p>
+        </footer>
       </div>
     </div>
   );
@@ -182,9 +298,60 @@ export function PlatformPage() {
           </tbody>
         </table>
 
+        <WaitlistAdmin />
+
         <RescuePanel />
       </main>
     </div>
+  );
+}
+
+// ---------- waitlist ----------
+
+interface WaitlistSignup {
+  id: number;
+  email: string;
+  marketing_opt_in: number;
+  created_at: number;
+  source: string;
+}
+
+function WaitlistAdmin() {
+  const [signups, setSignups] = useState<WaitlistSignup[] | null>(null);
+  useEffect(() => {
+    api<{ signups: WaitlistSignup[] }>('/api/platform/waitlist')
+      .then((r) => setSignups(r.signups))
+      .catch(() => {});
+  }, []);
+  if (!signups) return null;
+  return (
+    <>
+      <h1 style={{ marginTop: '2rem' }}>Platform — waitlist</h1>
+      {signups.length === 0 ? (
+        <p className="muted small">No signups yet — send someone to fleety.live.</p>
+      ) : (
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Email</th>
+              <th>Product updates</th>
+              <th>Signed up</th>
+            </tr>
+          </thead>
+          <tbody>
+            {signups.map((s) => (
+              <tr key={s.id}>
+                <td>
+                  <strong>{s.email}</strong>
+                </td>
+                <td>{s.marketing_opt_in === 1 ? '✓ opted in' : '—'}</td>
+                <td className="muted">{fmtAgo(s.created_at)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </>
   );
 }
 

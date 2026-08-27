@@ -24,6 +24,8 @@ export const config = {
   // the admin gets a shareable link instead.
   resendApiKey: env.RESEND_API_KEY || '',
   emailFrom: env.EMAIL_FROM || 'Fleety <ops@fleety.live>',
+  // Operator ping for new waitlist signups.
+  waitlistNotifyEmail: env.WAITLIST_NOTIFY_EMAIL || 'cube@sneakybox.com',
   publicBaseUrl: env.PUBLIC_BASE_URL || '', // e.g. https://invicta.fleety.live (per-club links derive from club slug)
   userAgent: 'Fleety/1.0 (club fleet tracker; https://fleety.live)',
 };

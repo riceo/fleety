@@ -56,9 +56,13 @@
           }),
           (e.__SV = 1));
       })(document, window.posthog || []);
+      // Cookieless: memory persistence stores nothing on the device, so no
+      // PECR consent banner is needed (see /cookies). Trade-off: visitors are
+      // counted per visit, not across visits.
       posthog.init('phc_scjhCJNqms4EAqn68Wj6xrD5tyEQYSD8Xv4dRLVPsEYa', {
         api_host: 'https://eu.i.posthog.com',
         defaults: '2025-05-24',
+        persistence: 'memory',
       });
     </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />

@@ -9,6 +9,7 @@ import { ReplayPage } from './pages/ReplayPage';
 import { KioskPage } from './pages/KioskPage';
 import { PlatformPage } from './pages/PlatformPage';
 import { AccountPage } from './pages/AccountPage';
+import { CookiesPage } from './pages/CookiesPage';
 import {
   AdminLayout,
   AircraftAdmin,
@@ -29,6 +30,7 @@ const router = createBrowserRouter([
   { path: '/history', element: <HistoryPage /> },
   { path: '/history/:flightId', element: <ReplayPage /> },
   { path: '/kiosk', element: <KioskPage /> },
+  { path: '/cookies', element: <CookiesPage /> },
   { path: '/platform', element: <PlatformPage /> },
   { path: '/account', element: <AccountPage /> },
   {

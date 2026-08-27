@@ -923,17 +923,181 @@ label.check {
 .login-card .brand {
   justify-content: center;
 }
-.landing-card {
-  align-items: center;
-  gap: 1.4rem;
-  max-width: 440px;
+/* ---------- fleety.live landing ---------- */
+
+.landing {
+  min-height: 100%;
+  overflow-y: auto;
+  padding: clamp(2rem, 6vh, 4.5rem) 1.25rem 2.5rem;
+  background:
+    radial-gradient(1100px 560px at 75% -10%, rgba(227, 38, 54, 0.1), transparent),
+    radial-gradient(800px 480px at 0% 110%, rgba(91, 107, 196, 0.12), transparent),
+    var(--bg);
 }
-.landing-card .brand-mark {
+.landing-inner {
+  max-width: 880px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2.75rem;
+}
+.landing-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 1rem;
+}
+.landing-hero .brand {
+  justify-content: center;
+}
+.landing-hero .brand-mark {
   width: 46px;
   height: 46px;
 }
-.landing-card .brand-name {
+.landing-hero .brand-name {
   font-size: 1.9rem;
+}
+.landing-hero h1 {
+  margin: 0.5rem 0 0;
+  font-size: clamp(1.6rem, 4vw, 2.3rem);
+  line-height: 1.15;
+  max-width: 620px;
+}
+.landing-hero .muted {
+  max-width: 540px;
+}
+.landing-domain {
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  padding: 0.45rem 0.9rem;
+  border-radius: 2px;
+  letter-spacing: 0.12em;
+}
+.landing-features {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+}
+.landing-feature {
+  background: var(--surface);
+  padding: 1.1rem 1.2rem 1.25rem;
+  border-top: 2px solid transparent;
+}
+.landing-feature:hover {
+  border-top-color: var(--red);
+}
+.landing-feature h3 {
+  margin: 0 0 0.5rem;
+  color: var(--red);
+}
+.landing-feature p {
+  margin: 0;
+  color: var(--ink-dim);
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+.landing-waitlist {
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-top: 3px solid var(--red);
+  border-radius: 2px;
+  padding: 1.6rem 1.5rem;
+  box-shadow: var(--shadow);
+  max-width: 560px;
+  width: 100%;
+  margin: 0 auto;
+  text-align: center;
+}
+.landing-waitlist h2 {
+  margin: 0 0 0.4rem;
+}
+.waitlist-row {
+  display: flex;
+  gap: 0.6rem;
+  margin: 1rem 0 0.75rem;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.waitlist-row input {
+  flex: 1;
+  min-width: 220px;
+}
+.waitlist-optin {
+  justify-content: center;
+  color: var(--ink-dim);
+  font-size: 0.85rem;
+  text-align: left;
+}
+.waitlist-done {
+  padding: 1rem 0 0.5rem;
+}
+.waitlist-done .mono-label {
+  color: var(--green, #3ddc84);
+  font-size: 1rem;
+}
+.landing-footer {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  border-top: 1px solid var(--line);
+  padding-top: 1.5rem;
+}
+.landing-love {
+  margin: 0;
+  color: var(--ink-dim);
+}
+.landing-love a,
+.landing-footer a {
+  color: var(--ink);
+}
+.landing-love span {
+  color: var(--red);
+}
+
+/* ---------- static document pages (/cookies) ---------- */
+
+.doc-page {
+  min-height: 100%;
+  overflow-y: auto;
+  padding: clamp(1.5rem, 5vh, 3.5rem) 1.25rem 3rem;
+  background: var(--bg);
+}
+.doc-inner {
+  max-width: 680px;
+  margin: 0 auto;
+  line-height: 1.6;
+}
+.doc-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  text-decoration: none;
+  color: var(--ink);
+  margin-bottom: 1.5rem;
+}
+.doc-brand .brand-mark {
+  width: 30px;
+  height: 30px;
+}
+.doc-inner h1 {
+  margin: 0 0 0.25rem;
+}
+.doc-inner h2 {
+  margin: 1.75rem 0 0.5rem;
+  font-size: 1.1rem;
+}
+.doc-inner p {
+  color: var(--ink-dim);
+}
+.doc-inner a {
+  color: var(--ink);
+}
+.doc-inner .table {
+  margin: 0.75rem 0;
 }
 .login-card .brand-logo {
   height: 74px;

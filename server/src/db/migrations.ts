@@ -276,6 +276,20 @@ CREATE TABLE login_tokens (
 ALTER TABLE aircraft ADD COLUMN description TEXT NOT NULL DEFAULT '';
 `,
   },
+  {
+    // Landing-page waitlist. marketing_opt_in records explicit consent for
+    // product updates (signup itself only ever triggers the operator ping).
+    id: 7,
+    sql: `
+CREATE TABLE waitlist (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  email TEXT NOT NULL UNIQUE,
+  marketing_opt_in INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  source TEXT NOT NULL DEFAULT ''
+);
+`,
+  },
 ];
 
 export function migrate(db: Database): void {

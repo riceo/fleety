@@ -45,6 +45,19 @@ export function sendInviteEmail(to: string, clubName: string, link: string): Pro
   );
 }
 
+// Operator ping when someone joins the landing-page waitlist.
+export function sendWaitlistNotification(signupEmail: string, marketing: boolean): Promise<boolean> {
+  return send(
+    config.waitlistNotifyEmail,
+    `Fleety waitlist: ${signupEmail}`,
+    shell(
+      'New waitlist signup',
+      `<p><strong>${signupEmail.replace(/</g, '&lt;')}</strong> joined the Fleety waitlist.</p><p>Product updates opt-in: <strong>${marketing ? 'yes' : 'no'}</strong>.</p>`,
+      { href: `https://${config.baseDomain}/platform`, label: 'Open platform admin' }
+    )
+  );
+}
+
 export function sendResetEmail(to: string, link: string): Promise<boolean> {
   return send(
     to,

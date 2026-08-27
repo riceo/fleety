@@ -222,7 +222,9 @@ export function KioskPage() {
       <div className="kiosk-body">
         {webgl ? (
           <div className="kiosk-map">
-            <MapView ref={mapRef} config={config} fleet={live.fleet} kiosk />
+            {/* followId keeps the camera glued to the focused aircraft (with
+                dead-reckoned easing), not just a one-shot fly-to. */}
+            <MapView ref={mapRef} config={config} fleet={live.fleet} followId={focused?.id ?? null} kiosk />
             <div className="radar-sweep" aria-hidden />
           </div>
         ) : (

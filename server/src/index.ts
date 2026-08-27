@@ -22,13 +22,14 @@ async function main() {
   const settings = new Settings(db);
   const live = new LiveBus();
 
+  const emitTicker = (ev: Parameters<typeof live.broadcastTicker>[0]) => live.broadcastTicker(ev);
   const detector = new FlightDetector(db, {}, {
     onFlightStarted: (flightId, aircraftId, callsign) => {
-      onTakeoff(db, flightId, aircraftId);
+      onTakeoff(db, flightId, aircraftId, emitTicker);
       void lookupRouteForFlight(db, flightId, callsign);
     },
     onFlightEnded: (flightId, aircraftId) => {
-      onLanding(db, flightId, aircraftId);
+      onLanding(db, flightId, aircraftId, emitTicker);
     },
   });
 

@@ -319,17 +319,17 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     const visFilter = audienceOf(req) === 'member' ? '' : " AND visibility = 'public'";
     const rows = db
       .prepare(
-        `SELECT id, hex, registration, callsign, type_name, nickname, category, color, icon, icon_path, photo_path, enabled
+        `SELECT id, hex, registration, callsign, type_name, nickname, tagline, category, color, icon, icon_path, photo_path, enabled
          FROM aircraft WHERE deleted_at IS NULL${visFilter} ORDER BY sort_order, id`
       )
       .all();
     return { aircraft: rows };
   });
 
-  // Kiosk ticker: departures/landings + standing messages.
+  // Ticker feed: departures/landings, standing messages, aircraft taglines.
   app.get('/api/ticker', async (req, reply) => {
     if (!requireViewer(req, reply)) return;
-    return { items: tickerItems(db) };
+    return { items: tickerItems(db, audienceOf(req)) };
   });
 
   // Club airfields for the map (base + regular markers).
@@ -403,6 +403,7 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     type_name: String(body.typeName ?? '').trim(),
     icao_type: String(body.icaoType ?? '').trim().toUpperCase(),
     nickname: String(body.nickname ?? '').trim(),
+    tagline: String(body.tagline ?? '').trim().slice(0, 160),
     operator: String(body.operator ?? '').trim(),
     icon: String(body.icon ?? 'low-wing'),
     color: /^#[0-9a-fA-F]{6}$/.test(String(body.color)) ? String(body.color) : '#46549a',
@@ -431,9 +432,9 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     try {
       const res = db
         .prepare(
-          `INSERT INTO aircraft (hex, registration, callsign, type_name, icao_type, nickname, operator, icon, color,
+          `INSERT INTO aircraft (hex, registration, callsign, type_name, icao_type, nickname, tagline, operator, icon, color,
              enabled, category, visibility, track_until, sort_order, notes, created_at, updated_at)
-           VALUES (@hex, @registration, @callsign, @type_name, @icao_type, @nickname, @operator, @icon, @color,
+           VALUES (@hex, @registration, @callsign, @type_name, @icao_type, @nickname, @tagline, @operator, @icon, @color,
              @enabled, @category, @visibility, @track_until, @sort_order, @notes, ${now}, ${now})`
         )
         .run(a);
@@ -453,7 +454,7 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     const res = db
       .prepare(
         `UPDATE aircraft SET hex=@hex, registration=@registration, callsign=@callsign, type_name=@type_name,
-           icao_type=@icao_type, nickname=@nickname, operator=@operator, icon=@icon, color=@color, enabled=@enabled,
+           icao_type=@icao_type, nickname=@nickname, tagline=@tagline, operator=@operator, icon=@icon, color=@color, enabled=@enabled,
            category=@category, visibility=@visibility, track_until=@track_until, sort_order=@sort_order, notes=@notes,
            updated_at=${Date.now()}
          WHERE id = @id AND deleted_at IS NULL`

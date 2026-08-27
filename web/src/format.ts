@@ -8,6 +8,17 @@ export function fmtTime(ts: number): string {
   return new Intl.DateTimeFormat('en-GB', { timeZone: TZ, hour: '2-digit', minute: '2-digit' }).format(ts);
 }
 
+export function fmtTimeUTC(ts: number): string {
+  return new Intl.DateTimeFormat('en-GB', { timeZone: 'UTC', hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(ts);
+}
+
+// INV01 -> "INVICTA 01", matching the radio callsign.
+export function displayCallsign(cs: string | null | undefined): string {
+  if (!cs) return '';
+  const m = /^INV\s?(\d+)$/i.exec(cs.trim());
+  return m ? `INVICTA ${m[1]}` : cs.trim().toUpperCase();
+}
+
 export function fmtDateTime(ts: number): string {
   return new Intl.DateTimeFormat('en-GB', {
     timeZone: TZ,

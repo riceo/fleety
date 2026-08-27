@@ -36,7 +36,7 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   poll_slow_ms: '30000',
   raw_retention_days: '90',
   poll_log_retention_days: '365',
-  tile_style_url: 'https://tiles.openfreemap.org/styles/liberty',
+  tile_style_url: 'https://tiles.openfreemap.org/styles/dark',
   map_center: '51.3519,0.5033',
   map_zoom: '9',
   deadman_url: '',

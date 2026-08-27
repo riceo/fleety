@@ -70,6 +70,7 @@ interface AdminAircraft {
   type_name: string;
   icao_type: string;
   nickname: string;
+  tagline: string;
   operator: string;
   icon: string;
   icon_path: string | null;
@@ -89,6 +90,7 @@ const EMPTY_AC: Partial<AdminAircraft> = {
   callsign: '',
   type_name: '',
   nickname: '',
+  tagline: '',
   operator: '',
   icon: 'low-wing',
   color: '#38bdf8',
@@ -141,6 +143,7 @@ function AircraftForm({ initial, onDone }: { initial: Partial<AdminAircraft>; on
       typeName: f.type_name,
       icaoType: f.icao_type,
       nickname: f.nickname,
+      tagline: f.tagline,
       operator: f.operator,
       icon: f.icon,
       color: f.color,
@@ -241,6 +244,10 @@ function AircraftForm({ initial, onDone }: { initial: Partial<AdminAircraft>; on
         <IconPreview icon={f.icon ?? 'low-wing'} color={f.color ?? '#38bdf8'} />
       </div>
       <label>
+        Tagline (shown on the board & ticker, e.g. “Our aerobatic display ship — where's he displaying next?”)
+        <input value={f.tagline ?? ''} onChange={(e) => set('tagline', e.target.value)} maxLength={160} />
+      </label>
+      <label>
         Notes
         <input value={f.notes ?? ''} onChange={(e) => set('notes', e.target.value)} />
       </label>
@@ -300,6 +307,7 @@ export function AircraftAdmin() {
       typeName: a.type_name,
       icaoType: a.icao_type,
       nickname: a.nickname,
+      tagline: a.tagline,
       operator: a.operator,
       icon: a.icon,
       color: a.color,

@@ -44,6 +44,7 @@ export class LiveBus {
         liveCallsign: null,
         typeName: row.type_name,
         nickname: row.nickname,
+        tagline: row.tagline,
         category: row.category,
         visibility: row.visibility,
         icon: row.icon,
@@ -61,6 +62,7 @@ export class LiveBus {
       base.callsign = row.callsign;
       base.typeName = row.type_name;
       base.nickname = row.nickname;
+      base.tagline = row.tagline;
       base.category = row.category;
       base.visibility = row.visibility;
       base.icon = row.icon;
@@ -120,6 +122,16 @@ export class LiveBus {
     if (a.flightId !== null && age < AIRBORNE_FRESH_MS) return 'airborne';
     if (age < GROUND_FRESH_MS) return 'ground';
     return 'offline';
+  }
+
+  // A departure/landing just happened: push it to live clients so tickers
+  // refresh and the board snaps focus — respecting per-aircraft visibility.
+  broadcastTicker(ev: { ts: number; text: string; aircraftId: number | null; visibility: 'public' | 'members' }): void {
+    const payload = JSON.stringify({ ts: ev.ts, text: ev.text, aircraftId: ev.aircraftId });
+    for (const c of this.clients.values()) {
+      if (ev.visibility === 'members' && c.audience !== 'member') continue;
+      c.res.write(`event: ticker\ndata: ${payload}\n\n`);
+    }
   }
 
   // Kiosk annotations: sync the active note per aircraft; changes are pushed.

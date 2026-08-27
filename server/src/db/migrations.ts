@@ -180,6 +180,16 @@ CREATE TABLE ticker_events (
 CREATE INDEX idx_ticker_ts ON ticker_events(ts);
 `,
   },
+  {
+    id: 4,
+    sql: `
+ALTER TABLE aircraft ADD COLUMN tagline TEXT NOT NULL DEFAULT '';
+UPDATE aircraft SET color = '#e32636' WHERE color = '#46549a';
+UPDATE aircraft SET tagline = 'Our aerobatic display ship — where''s he displaying next?' WHERE callsign = 'INV01';
+UPDATE settings SET value = 'https://tiles.openfreemap.org/styles/dark'
+  WHERE key = 'tile_style_url' AND value = 'https://tiles.openfreemap.org/styles/liberty';
+`,
+  },
 ];
 
 export function migrate(db: Database): void {

@@ -22,6 +22,7 @@ export interface LiveAircraft {
   liveCallsign: string | null;
   typeName: string;
   nickname: string;
+  tagline: string;
   category: 'fleet' | 'guest';
   visibility: 'public' | 'members';
   icon: string;
@@ -38,6 +39,7 @@ export interface LiveAircraft {
 export interface TickerItem {
   ts: number;
   text: string;
+  aircraftId: number | null;
 }
 
 export interface LiveDelta extends Omit<LiveAircraft, 'trail'> {

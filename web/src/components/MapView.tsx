@@ -4,8 +4,8 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import { api, type AppConfig, type LiveAircraft } from '../api';
 import { renderIcon, renderRoundel } from '../icons';
 
-const INVICTA_RED = '#d1202f';
-const INVICTA_BLUE = '#46549a';
+const INVICTA_RED = '#e32636';
+const INVICTA_BLUE = '#5b6bc4';
 
 type EuAirport = [ident: string, name: string, lat: number, lon: number, kind: number];
 
@@ -43,9 +43,9 @@ function addAirfieldLayers(map: maplibregl.Map): void {
         'circle-stroke-color': 'rgba(255,255,255,0.9)',
       },
     });
-  dotLayer('eu-airports-large', 2, 4, 4, '#5b6b9e');
-  dotLayer('eu-airports-medium', 1, 6.5, 3, '#7285b3');
-  dotLayer('eu-airports-small', 0, 8.5, 2.4, '#8b9cc0');
+  dotLayer('eu-airports-large', 2, 4, 4, '#8496cf');
+  dotLayer('eu-airports-medium', 1, 6.5, 3, '#6c7ca8');
+  dotLayer('eu-airports-small', 0, 8.5, 2.4, '#566489');
 
   map.addLayer({
     id: 'eu-airports-labels',
@@ -61,8 +61,8 @@ function addAirfieldLayers(map: maplibregl.Map): void {
       'text-font': ['Noto Sans Regular'],
     },
     paint: {
-      'text-color': '#5b6b8f',
-      'text-halo-color': 'rgba(255,255,255,0.9)',
+      'text-color': '#7787ad',
+      'text-halo-color': 'rgba(5,8,16,0.85)',
       'text-halo-width': 1.4,
     },
   });
@@ -82,8 +82,8 @@ function addAirfieldLayers(map: maplibregl.Map): void {
       'text-font': ['Noto Sans Bold'],
     },
     paint: {
-      'text-color': ['case', ['==', ['get', 'isBase'], 1], INVICTA_RED, INVICTA_BLUE],
-      'text-halo-color': 'rgba(255,255,255,0.95)',
+      'text-color': ['case', ['==', ['get', 'isBase'], 1], '#ff5561', '#93a4de'],
+      'text-halo-color': 'rgba(5,8,16,0.9)',
       'text-halo-width': 1.6,
     },
   });
@@ -209,8 +209,8 @@ export const MapView = forwardRef<MapViewHandle, Props>(function MapView(
           'text-font': ['Noto Sans Bold'],
         },
         paint: {
-          'text-color': '#12233d',
-          'text-halo-color': 'rgba(255,255,255,0.92)',
+          'text-color': '#eef2fb',
+          'text-halo-color': 'rgba(5,8,16,0.9)',
           'text-halo-width': 1.8,
           'icon-opacity': ['case', ['get', 'ghost'], 0.55, 1],
         },

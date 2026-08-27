@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { api, post, type LiveAircraft, type TickerItem } from '../api';
+import { post, type LiveAircraft } from '../api';
 import { useAuth } from '../auth';
 import { useLiveFleet } from '../live';
 import { MapView, type MapViewHandle } from '../components/MapView';
 import { StatusBadge } from '../components/FleetPanel';
-import { fmtAgo, fmtAlt, fmtGs, fmtTime } from '../format';
-import { BrandMark } from '../components/TopBar';
+import { Ticker } from '../components/Ticker';
+import { DEFAULT_LOGO } from '../components/TopBar';
+import { displayCallsign, fmtAgo, fmtAlt, fmtGs, fmtTime, fmtTimeUTC } from '../format';
 
 function webglAvailable(): boolean {
   try {
@@ -16,65 +17,46 @@ function webglAvailable(): boolean {
   }
 }
 
-// Plane-spotting card: the aircraft photo fills the card so people in the
-// coffee shop can recognise what is overhead.
-function KioskCard({ a, focused }: { a: LiveAircraft; focused: boolean }) {
+// Big board card. The focused aircraft gets the hero treatment: full photo,
+// huge callsign, live data readouts.
+function BoardCard({ a, focused }: { a: LiveAircraft; focused: boolean }) {
+  const airborne = a.status === 'airborne';
   return (
     <div
-      className={`kiosk-card${focused ? ' focused' : ''}${a.status === 'airborne' ? ' airborne' : ''}${a.photoUrl ? ' has-photo' : ''}`}
+      className={`board-card${focused ? ' focused' : ''}${airborne ? ' airborne' : ''}`}
+      style={{ ['--strip-color' as string]: a.color }}
     >
-      {a.photoUrl && <div className="kiosk-card-photo" style={{ backgroundImage: `url(${a.photoUrl})` }} />}
-      <div className="kiosk-card-content">
-        <div className="kiosk-card-head">
-          <span className="kiosk-reg">
-            {a.status === 'airborne' && a.liveCallsign ? a.liveCallsign : a.registration}
-          </span>
+      {a.photoUrl && <div className="board-card-photo" style={{ backgroundImage: `url(${a.photoUrl})` }} />}
+      <div className="board-card-content">
+        <div className="board-card-head">
+          <span className="board-callsign">{displayCallsign((airborne && a.liveCallsign) || a.callsign) || a.registration}</span>
           <StatusBadge status={a.status} />
         </div>
-        <div className="kiosk-card-type">{a.nickname || a.typeName}</div>
-        {a.status === 'airborne' && a.pos ? (
-          <div className="kiosk-card-stats">
-            <span>{fmtAlt(a.pos.altBaro)}</span>
-            <span>{fmtGs(a.pos.gs)}</span>
+        <div className="mono-label">
+          {a.registration} · {(a.nickname || a.typeName).toUpperCase()}
+        </div>
+        {airborne && a.pos ? (
+          <div className="board-card-data">
+            <span>
+              <label>ALT</label>
+              {fmtAlt(a.pos.altBaro)}
+            </span>
+            <span>
+              <label>GS</label>
+              {fmtGs(a.pos.gs)}
+            </span>
           </div>
         ) : (
-          <div className="kiosk-card-stats muted">{a.pos ? fmtAgo(a.pos.ts) : 'no recent data'}</div>
+          <div className="board-card-last mono-label">{a.pos ? `LAST CONTACT ${fmtAgo(a.pos.ts).toUpperCase()}` : 'NO RECENT CONTACT'}</div>
         )}
-        {a.note && <div className="kiosk-card-note">{a.note}</div>}
+        {(a.note || a.tagline) && <div className="board-card-note">{a.note ?? a.tagline}</div>}
       </div>
     </div>
   );
 }
 
-function Ticker({ enabled }: { enabled: boolean }) {
-  const [items, setItems] = useState<TickerItem[]>([]);
-  useEffect(() => {
-    if (!enabled) return;
-    const load = () =>
-      api<{ items: TickerItem[] }>('/api/ticker')
-        .then((r) => setItems(r.items))
-        .catch(() => {});
-    load();
-    const t = setInterval(load, 60_000);
-    return () => clearInterval(t);
-  }, [enabled]);
-
-  const line = useMemo(
-    () => items.map((i) => `${fmtTime(i.ts)}  ${i.text}`).join('   ✦   '),
-    [items]
-  );
-  if (!line) return null;
-  // Content is doubled for a seamless CSS marquee loop.
-  const duration = Math.max(20, line.length * 0.28);
-  return (
-    <div className="kiosk-ticker">
-      <div className="kiosk-ticker-inner" style={{ animationDuration: `${duration}s` }}>
-        <span>{line}</span>
-        <span aria-hidden>{line}</span>
-      </div>
-    </div>
-  );
-}
+const CYCLE_MS = 12_000;
+const EVENT_HOLD_MS = 25_000;
 
 export function KioskPage() {
   const { config, refresh, loading } = useAuth();
@@ -85,6 +67,8 @@ export function KioskPage() {
   const mapRef = useRef<MapViewHandle>(null);
   const [clock, setClock] = useState(() => Date.now());
   const [focusIdx, setFocusIdx] = useState(0);
+  const [eventFocusId, setEventFocusId] = useState<number | null>(null);
+  const eventFocusUntil = useRef(0);
 
   // Exchange the ?token= for a kiosk session cookie, then strip it from the
   // URL so it never shows on screen or in referrers.
@@ -131,14 +115,31 @@ export function KioskPage() {
   const airborne = live.fleet.filter((a) => a.status === 'airborne');
   const others = live.fleet.filter((a) => a.status !== 'airborne');
 
-  // Cycle camera focus between airborne aircraft every 15s.
+  // A departure/landing steals focus immediately and holds it a while.
+  useEffect(() => {
+    if (live.tickerEvent?.aircraftId) {
+      setEventFocusId(live.tickerEvent.aircraftId);
+      eventFocusUntil.current = Date.now() + EVENT_HOLD_MS;
+    }
+  }, [live.tickerEvent?.seq]);
+
+  // Otherwise cycle focus through whatever is in the air.
   useEffect(() => {
     if (airborne.length === 0) return;
-    const t = setInterval(() => setFocusIdx((i) => i + 1), 15_000);
+    const t = setInterval(() => {
+      if (Date.now() > eventFocusUntil.current) {
+        setEventFocusId(null);
+        setFocusIdx((i) => i + 1);
+      }
+    }, CYCLE_MS);
     return () => clearInterval(t);
   }, [airborne.length]);
 
-  const focused = airborne.length > 0 ? airborne[focusIdx % airborne.length] : null;
+  const eventFocused =
+    eventFocusId !== null && Date.now() < eventFocusUntil.current
+      ? (live.fleet.find((a) => a.id === eventFocusId) ?? null)
+      : null;
+  const focused = eventFocused ?? (airborne.length > 0 ? airborne[focusIdx % airborne.length] : null);
 
   useEffect(() => {
     if (focused) {
@@ -149,50 +150,71 @@ export function KioskPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focused?.id, live.fleet.length === 0]);
 
-  if (loading || !config) return <div className="kiosk-splash">Starting…</div>;
+  if (loading || !config) return <div className="kiosk-splash mono-label">ACQUIRING…</div>;
   if (authFailed)
     return <div className="kiosk-splash">Kiosk link is no longer valid — generate a new one in the admin panel.</div>;
   if (live.denied)
     return <div className="kiosk-splash">This screen needs a kiosk link. Open /kiosk?token=… from the admin panel.</div>;
 
+  const railList = [
+    ...(focused ? [focused] : []),
+    ...airborne.filter((a) => a.id !== focused?.id),
+    ...others.filter((a) => a.id !== focused?.id),
+  ];
+
   return (
     <div className="kiosk">
       <header className="kiosk-header">
         <div className="brand">
-          {config.logoUrl ? <img src={config.logoUrl} alt="" className="brand-logo" /> : <BrandMark />}
-          <span className="brand-name">{config.siteName}</span>
+          <img src={config.logoUrl || DEFAULT_LOGO} alt="" className="brand-logo" />
+          <span className="brand-name">
+            {config.siteName.toUpperCase()}
+            <span className="brand-sub">OPERATIONS BOARD · KENT</span>
+          </span>
         </div>
         <div className="kiosk-status">
-          {airborne.length > 0 ? `${airborne.length} aircraft airborne` : 'Fleet on the ground'}
           <span className={`conn-dot ${live.connected ? 'ok' : 'bad'}`} />
+          {airborne.length > 0 ? (
+            <span>
+              <strong className="kiosk-count">{airborne.length.toString().padStart(2, '0')}</strong> IN THE AIR
+            </span>
+          ) : (
+            <span>ALL QUIET — FLEET ON THE GROUND</span>
+          )}
         </div>
-        <div className="kiosk-clock">{fmtTime(clock)}</div>
+        <div className="kiosk-clocks">
+          <div>
+            <label>UTC</label>
+            <span>{fmtTimeUTC(clock)}</span>
+          </div>
+          <div>
+            <label>LOCAL</label>
+            <span>{fmtTime(clock)}</span>
+          </div>
+        </div>
       </header>
       <div className="kiosk-body">
         {webgl ? (
           <div className="kiosk-map">
             <MapView ref={mapRef} config={config} fleet={live.fleet} kiosk />
+            <div className="radar-sweep" aria-hidden />
           </div>
         ) : (
           <div className="kiosk-board">
-            {/* Departure-board fallback for screens without WebGL */}
             {live.fleet.map((a) => (
-              <KioskCard key={a.id} a={a} focused={false} />
+              <BoardCard key={a.id} a={a} focused={false} />
             ))}
           </div>
         )}
         {webgl && (
           <aside className="kiosk-rail">
-            {airborne.map((a) => (
-              <KioskCard key={a.id} a={a} focused={focused?.id === a.id} />
-            ))}
-            {others.map((a) => (
-              <KioskCard key={a.id} a={a} focused={false} />
+            {railList.map((a) => (
+              <BoardCard key={a.id} a={a} focused={focused?.id === a.id} />
             ))}
           </aside>
         )}
       </div>
-      <Ticker enabled={ready && !live.denied} />
+      <Ticker size="board" enabled={ready && !live.denied} liveEvent={live.tickerEvent} />
     </div>
   );
 }

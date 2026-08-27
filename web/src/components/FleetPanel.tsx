@@ -1,55 +1,63 @@
 import type { LiveAircraft } from '../api';
-import { fmtAgo, fmtAlt, fmtGs } from '../format';
+import { displayCallsign, fmtAgo, fmtAlt, fmtGs } from '../format';
 
 export function StatusBadge({ status }: { status: LiveAircraft['status'] }) {
-  const label = status === 'airborne' ? 'Airborne' : status === 'ground' ? 'On ground' : 'Offline';
-  return <span className={`badge badge-${status}`}>{label}</span>;
+  const label = status === 'airborne' ? 'Airborne' : status === 'ground' ? 'On stand' : 'No signal';
+  return (
+    <span className={`badge badge-${status}`}>
+      <span className="badge-dot" />
+      {label}
+    </span>
+  );
 }
 
-export function AircraftCard({
+// ATC-style flight strip. Airborne aircraft get the expanded strip with photo
+// and live data; everything else is a compact one-liner in the bay.
+export function FlightStrip({
   a,
   selected,
   onClick,
-  big,
 }: {
   a: LiveAircraft;
   selected?: boolean;
   onClick?: () => void;
-  big?: boolean;
 }) {
+  const airborne = a.status === 'airborne';
   return (
     <button
-      className={`ac-card${selected ? ' selected' : ''}${big ? ' big' : ''}`}
+      className={`strip${airborne ? ' strip-air' : ''}${selected ? ' selected' : ''}`}
+      style={{ ['--strip-color' as string]: a.color }}
       onClick={onClick}
       aria-label={`${a.registration} ${a.nickname || a.typeName}, ${a.status}`}
     >
-      <div className="ac-card-photo" style={{ borderColor: a.color }}>
-        {a.photoUrl ? (
-          <img src={a.photoUrl} alt={a.registration} loading="lazy" />
-        ) : (
-          <div className="ac-card-photo-fallback" style={{ color: a.color }}>
-            ✈
+      {airborne && a.photoUrl && (
+        <div className="strip-photo" style={{ backgroundImage: `url(${a.photoUrl})` }} />
+      )}
+      <div className="strip-body">
+        <div className="strip-top">
+          <span className="strip-callsign">{displayCallsign((airborne && a.liveCallsign) || a.callsign) || a.registration}</span>
+          <StatusBadge status={a.status} />
+        </div>
+        <div className="strip-meta">
+          <span className="mono-label">{a.registration}</span>
+          <span className="strip-type">{a.nickname || a.typeName}</span>
+          {a.category === 'guest' && <span className="guest-tag">GUEST</span>}
+        </div>
+        {airborne && a.pos && (
+          <div className="strip-data">
+            <span>
+              <label>ALT</label> {fmtAlt(a.pos.altBaro)}
+            </span>
+            <span>
+              <label>GS</label> {fmtGs(a.pos.gs)}
+            </span>
+            <span>
+              <label>SQK</label> {a.pos.squawk ?? '——'}
+            </span>
           </div>
         )}
-      </div>
-      <div className="ac-card-body">
-        <div className="ac-card-title">
-          <span className="ac-reg">{a.registration}</span>
-          <span className="ac-callsign">{a.status === 'airborne' && a.liveCallsign ? a.liveCallsign : a.callsign}</span>
-        </div>
-        <div className="ac-card-sub">
-          {a.nickname || a.typeName}
-          {a.category === 'guest' && <span className="guest-tag">guest</span>}
-        </div>
-        <div className="ac-card-stats">
-          <StatusBadge status={a.status} />
-          {a.status === 'airborne' && a.pos && (
-            <span className="ac-stats-text">
-              {fmtAlt(a.pos.altBaro)} · {fmtGs(a.pos.gs)}
-            </span>
-          )}
-          {a.status !== 'airborne' && a.pos && <span className="ac-stats-text muted">{fmtAgo(a.pos.ts)}</span>}
-        </div>
+        {!airborne && a.pos && <div className="strip-last mono-label">LAST CONTACT {fmtAgo(a.pos.ts).toUpperCase()}</div>}
+        {(a.note || a.tagline) && <div className="strip-note">{a.note ?? a.tagline}</div>}
       </div>
     </button>
   );
@@ -64,23 +72,40 @@ export function FleetPanel({
   selectedId: number | null;
   onSelect: (id: number) => void;
 }) {
-  const order = { airborne: 0, ground: 1, offline: 2 } as const;
-  const fleetAc = fleet.filter((a) => a.category === 'fleet').sort((x, y) => order[x.status] - order[y.status]);
-  const guests = fleet.filter((a) => a.category === 'guest').sort((x, y) => order[x.status] - order[y.status]);
+  const airborne = fleet.filter((a) => a.status === 'airborne');
+  const ground = fleet.filter((a) => a.status !== 'airborne' && a.category === 'fleet');
+  const guests = fleet.filter((a) => a.status !== 'airborne' && a.category === 'guest');
   return (
-    <div className="fleet-panel">
-      <div className="fleet-panel-section">
-        <h3>Fleet</h3>
-        {fleetAc.map((a) => (
-          <AircraftCard key={a.id} a={a} selected={a.id === selectedId} onClick={() => onSelect(a.id)} />
+    <div className="strip-bay">
+      <div className="bay-section">
+        <h3 className="bay-head">
+          In the air <span className="bay-count">{airborne.length.toString().padStart(2, '0')}</span>
+        </h3>
+        {airborne.map((a) => (
+          <FlightStrip key={a.id} a={a} selected={a.id === selectedId} onClick={() => onSelect(a.id)} />
         ))}
-        {fleetAc.length === 0 && <p className="muted small">No aircraft configured yet.</p>}
+        {airborne.length === 0 && (
+          <div className="bay-quiet">
+            <span className="bay-quiet-big">ALL QUIET</span>
+            <span className="mono-label">FLEET ON THE GROUND AT ROCHESTER</span>
+          </div>
+        )}
+      </div>
+      <div className="bay-section">
+        <h3 className="bay-head">
+          On the ground <span className="bay-count">{ground.length.toString().padStart(2, '0')}</span>
+        </h3>
+        {ground.map((a) => (
+          <FlightStrip key={a.id} a={a} selected={a.id === selectedId} onClick={() => onSelect(a.id)} />
+        ))}
       </div>
       {guests.length > 0 && (
-        <div className="fleet-panel-section">
-          <h3>Guest aircraft</h3>
+        <div className="bay-section">
+          <h3 className="bay-head">
+            Guest aircraft <span className="bay-count">{guests.length.toString().padStart(2, '0')}</span>
+          </h3>
           {guests.map((a) => (
-            <AircraftCard key={a.id} a={a} selected={a.id === selectedId} onClick={() => onSelect(a.id)} />
+            <FlightStrip key={a.id} a={a} selected={a.id === selectedId} onClick={() => onSelect(a.id)} />
           ))}
         </div>
       )}

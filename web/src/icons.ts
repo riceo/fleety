@@ -2,7 +2,7 @@
 // Tinted per-aircraft, rasterized to ImageData for MapLibre addImage().
 
 const wrap = (inner: string) =>
-  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><g fill="currentColor" stroke="#0b1626" stroke-width="1.2" stroke-linejoin="round">${inner}</g></svg>`;
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><g fill="currentColor" stroke="rgba(255,255,255,0.92)" stroke-width="1.4" stroke-linejoin="round">${inner}</g></svg>`;
 
 export const BUILTIN_ICONS: Record<string, string> = {
   'low-wing': wrap(

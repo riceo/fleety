@@ -34,10 +34,13 @@ describe('kiosk annotations', () => {
 
     expect(activeNotes(db).get(aircraftId)).toBe('PAX: Bob and Jess experience');
 
-    onTakeoff(db, flightId, aircraftId);
-    const ticker = tickerItems(db);
-    expect(ticker.some((t) => t.text.includes('INV08 HAS TAKEN OFF FROM ROCHESTER'))).toBe(true);
+    const emitted: { text: string; aircraftId: number | null }[] = [];
+    onTakeoff(db, flightId, aircraftId, (ev) => emitted.push(ev));
+    const ticker = tickerItems(db, 'member');
+    expect(ticker.some((t) => t.text.includes('INVICTA 08 HAS DEPARTED ROCHESTER!'))).toBe(true);
     expect(ticker.some((t) => t.text.includes('PAX: BOB AND JESS EXPERIENCE'))).toBe(true);
+    expect(emitted).toHaveLength(1);
+    expect(emitted[0].aircraftId).toBe(aircraftId);
     expect(activeNotes(db).get(aircraftId)).toBe('PAX: Bob and Jess experience');
 
     db.prepare("UPDATE flights SET ended_at = ?, end_confidence = 'confirmed', dest_airfield_id = 1 WHERE id = ?").run(
@@ -46,7 +49,18 @@ describe('kiosk annotations', () => {
     );
     onLanding(db, flightId, aircraftId);
     expect(activeNotes(db).get(aircraftId)).toBeUndefined();
-    expect(tickerItems(db).some((t) => t.text.includes('INV08 HAS LANDED AT ROCHESTER'))).toBe(true);
+    expect(tickerItems(db, 'member').some((t) => t.text.includes('INVICTA 08 HAS LANDED AT ROCHESTER'))).toBe(true);
+  });
+
+  it('hides members-only aircraft from the restricted ticker and surfaces taglines', () => {
+    const { db, aircraftId, flightId } = setup();
+    db.prepare("UPDATE aircraft SET visibility = 'members', tagline = 'Aerobatic ship — where next?' WHERE id = ?").run(
+      aircraftId
+    );
+    onTakeoff(db, flightId, aircraftId);
+    expect(tickerItems(db, 'member').some((t) => t.text.includes('HAS DEPARTED'))).toBe(true);
+    expect(tickerItems(db, 'restricted')).toHaveLength(0);
+    expect(tickerItems(db, 'member').some((t) => t.text.includes('AEROBATIC SHIP — WHERE NEXT?'))).toBe(true);
   });
 
   it('timed notes expire on their own', () => {

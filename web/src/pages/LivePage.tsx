@@ -3,9 +3,10 @@ import { Link, Navigate } from 'react-router-dom';
 import { useAuth } from '../auth';
 import { useLiveFleet } from '../live';
 import { MapView, type MapViewHandle } from '../components/MapView';
-import { AircraftCard, FleetPanel, StatusBadge } from '../components/FleetPanel';
+import { FleetPanel, StatusBadge } from '../components/FleetPanel';
 import { TopBar } from '../components/TopBar';
-import { fmtAgo, fmtAlt, fmtGs } from '../format';
+import { Ticker } from '../components/Ticker';
+import { displayCallsign, fmtAgo, fmtAlt, fmtGs } from '../format';
 
 export function LivePage() {
   const { me, config, loading } = useAuth();
@@ -22,7 +23,7 @@ export function LivePage() {
     return <Navigate to="/login" replace />;
   }
   if (loading || !config) {
-    return <div className="page-loading">Loading…</div>;
+    return <div className="page-loading mono-label">ACQUIRING…</div>;
   }
 
   const select = (id: number | null) => {
@@ -38,11 +39,9 @@ export function LivePage() {
         <aside className="live-sidebar">
           <div className="sidebar-head">
             <span className={`conn-dot ${live.connected ? 'ok' : 'bad'}`} />
-            <span className="muted small">
-              {airborneCount > 0 ? `${airborneCount} airborne` : 'All quiet'}
-            </span>
+            <span className="mono-label">{live.connected ? 'FEED ACTIVE' : 'RECONNECTING'}</span>
             <button className="btn btn-ghost small" onClick={() => mapRef.current?.fitFleet()}>
-              Fit fleet
+              FIT
             </button>
           </div>
           <FleetPanel fleet={live.fleet} selectedId={selectedId} onSelect={select} />
@@ -60,7 +59,7 @@ export function LivePage() {
 
           {/* Mobile bottom sheet toggle */}
           <button className="sheet-toggle" onClick={() => setSheetOpen((v) => !v)}>
-            {sheetOpen ? 'Hide fleet' : `Fleet${airborneCount ? ` · ${airborneCount} airborne` : ''}`}
+            {sheetOpen ? 'CLOSE' : `FLEET ${airborneCount ? `· ${airborneCount} AIRBORNE` : ''}`}
           </button>
           <div className={`bottom-sheet${sheetOpen ? ' open' : ''}`}>
             <FleetPanel
@@ -74,48 +73,65 @@ export function LivePage() {
           </div>
 
           {selected && (
-            <div className="detail-card">
-              <AircraftCard a={selected} />
-              {selected.note && <p className="detail-note">{selected.note}</p>}
-              <div className="detail-grid">
+            <div className="target-panel">
+              <div className="target-head">
+                <span className="mono-label">TARGET DATA</span>
+                <button className="target-close" onClick={() => select(null)} aria-label="Close">
+                  ✕
+                </button>
+              </div>
+              {selected.photoUrl && (
+                <div className="target-photo" style={{ backgroundImage: `url(${selected.photoUrl})` }} />
+              )}
+              <div className="target-id">
+                <span className="target-callsign">
+                  {displayCallsign((selected.status === 'airborne' && selected.liveCallsign) || selected.callsign) ||
+                    selected.registration}
+                </span>
+                <StatusBadge status={selected.status} />
+              </div>
+              <div className="target-sub mono-label">
+                {selected.registration} · {(selected.nickname || selected.typeName).toUpperCase()}
+              </div>
+              {selected.tagline && <p className="target-tagline">{selected.tagline}</p>}
+              {selected.note && <p className="target-note">{selected.note}</p>}
+              <div className="target-grid">
                 <div>
                   <label>Altitude</label>
                   <strong>{fmtAlt(selected.pos?.altBaro ?? null)}</strong>
                 </div>
                 <div>
-                  <label>Ground speed</label>
+                  <label>Grnd speed</label>
                   <strong>{fmtGs(selected.pos?.gs ?? null)}</strong>
                 </div>
                 <div>
                   <label>Squawk</label>
-                  <strong>{selected.pos?.squawk ?? '—'}</strong>
+                  <strong>{selected.pos?.squawk ?? '——'}</strong>
                 </div>
                 <div>
-                  <label>Last seen</label>
-                  <strong>{selected.pos ? fmtAgo(selected.pos.ts) : '—'}</strong>
+                  <label>Contact</label>
+                  <strong>{selected.pos ? fmtAgo(selected.pos.ts) : '——'}</strong>
                 </div>
               </div>
-              <div className="detail-actions">
-                <StatusBadge status={selected.status} />
+              <div className="target-actions">
                 {selected.status === 'airborne' && (
                   <button
                     className={`btn small${following ? ' btn-primary' : ''}`}
                     onClick={() => setFollowing((v) => !v)}
                   >
-                    {following ? 'Following' : 'Follow'}
+                    {following ? 'FOLLOWING' : 'FOLLOW'}
                   </button>
                 )}
                 {selected.flightId && me?.user && (
                   <Link className="btn small" to={`/history/${selected.flightId}`}>
-                    Flight so far
+                    FLIGHT SO FAR
                   </Link>
                 )}
-                <button className="btn btn-ghost small" onClick={() => select(null)}>
-                  Close
-                </button>
               </div>
             </div>
           )}
+
+          <Ticker size="bar" enabled={!loading} liveEvent={live.tickerEvent} />
         </main>
       </div>
     </div>

@@ -1,11 +1,19 @@
 import { useEffect, useRef, useState } from 'react';
 import type { LiveAircraft, LiveDelta } from './api';
 
+export interface LiveTickerEvent {
+  ts: number;
+  text: string;
+  aircraftId: number | null;
+  seq: number; // bumps on every event so consumers can react
+}
+
 export interface LiveState {
   fleet: LiveAircraft[];
   connected: boolean;
   lastEventAt: number;
   denied: boolean; // stream rejected (needs login)
+  tickerEvent: LiveTickerEvent | null; // most recent departure/landing push
 }
 
 // Subscribes to the server-sent event stream. Snapshot on connect, deltas
@@ -14,6 +22,8 @@ export function useLiveFleet(enabled: boolean): LiveState {
   const [fleet, setFleet] = useState<LiveAircraft[]>([]);
   const [connected, setConnected] = useState(false);
   const [denied, setDenied] = useState(false);
+  const [tickerEvent, setTickerEvent] = useState<LiveTickerEvent | null>(null);
+  const tickerSeq = useRef(0);
   const lastEventAt = useRef(Date.now());
   const byId = useRef(new Map<number, LiveAircraft>());
 
@@ -67,6 +77,16 @@ export function useLiveFleet(enabled: boolean): LiveState {
       }
     });
 
+    es.addEventListener('ticker', (ev) => {
+      try {
+        const data = JSON.parse((ev as MessageEvent).data) as { ts: number; text: string; aircraftId: number | null };
+        tickerSeq.current += 1;
+        setTickerEvent({ ...data, seq: tickerSeq.current });
+      } catch {
+        /* malformed event */
+      }
+    });
+
     es.onerror = () => {
       setConnected(false);
       // If we are unauthenticated the stream will 401 forever; check once and
@@ -88,5 +108,5 @@ export function useLiveFleet(enabled: boolean): LiveState {
     };
   }, [enabled]);
 
-  return { fleet, connected, lastEventAt: lastEventAt.current, denied };
+  return { fleet, connected, lastEventAt: lastEventAt.current, denied, tickerEvent };
 }

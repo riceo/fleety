@@ -39,6 +39,7 @@ export interface AircraftRow {
   type_name: string;
   icao_type: string;
   nickname: string;
+  tagline: string;
   operator: string;
   icon: string;
   icon_path: string | null;
@@ -97,6 +98,7 @@ export interface LiveAircraft {
   liveCallsign: string | null; // callsign currently transmitted
   typeName: string;
   nickname: string;
+  tagline: string; // standing per-aircraft message ("aerobatic display ship…")
   category: 'fleet' | 'guest';
   visibility: 'public' | 'members';
   icon: string;

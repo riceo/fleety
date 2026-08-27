@@ -76,7 +76,13 @@ async function build(): Promise<World> {
   const live = new LiveBus();
   const clubs = new Clubs(db);
   const detector = new FlightDetector(db);
-  const poller = new Poller(db, { name: 'test', fetchPositions: async () => [] }, settings, detector, live);
+  const poller = new Poller(
+    db,
+    [{ name: 'test', fetchStates: async () => ({ positions: [], presences: [] }) }],
+    settings,
+    detector,
+    live
+  );
   // Stub SPA shell so the meta-injection routes have something to template.
   const webDist = fs.mkdtempSync(path.join(os.tmpdir(), 'fleety-test-'));
   fs.writeFileSync(

@@ -174,7 +174,11 @@ export function LivePage() {
                 </div>
                 <div>
                   <label>Contact</label>
-                  <strong>{selected.pos ? fmtAgo(selected.pos.ts) : '——'}</strong>
+                  <strong>
+                    {selected.pos || selected.awakeTs
+                      ? fmtAgo(Math.max(selected.pos?.ts ?? 0, selected.awakeTs ?? 0))
+                      : '——'}
+                  </strong>
                 </div>
               </div>
               <div className="target-actions">

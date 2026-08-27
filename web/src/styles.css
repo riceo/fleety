@@ -622,6 +622,14 @@ label.check {
   color: var(--amber);
   border-color: rgba(245, 185, 66, 0.35);
 }
+.badge-awake {
+  color: var(--amber);
+  border-color: rgba(245, 185, 66, 0.55);
+}
+.badge-awake .badge-dot {
+  animation: pulse 1.6s ease-in-out infinite;
+  box-shadow: 0 0 6px currentColor;
+}
 .badge-offline {
   color: var(--ink-dim);
   border-color: var(--line-strong);
@@ -772,6 +780,17 @@ label.check {
   display: flex;
   align-items: center;
   flex: 1;
+}
+.ticker-quiet {
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 0.78rem;
+  letter-spacing: 0.14em;
+  opacity: 0.85;
+}
+.ticker-board .ticker-quiet {
+  font-size: 1.05rem;
 }
 .ticker-inner {
   display: inline-block;
@@ -1127,21 +1146,31 @@ label.check {
   overflow: hidden;
 }
 .radar-sweep {
+  /* A true circle, centred and oversized, with a radial fade so the wedge
+     never shows a hard (square) edge at any zoom. */
   position: absolute;
-  inset: -25%;
+  left: 50%;
+  top: 50%;
+  width: 170%;
+  aspect-ratio: 1 / 1;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
   pointer-events: none;
   background: conic-gradient(
     from 0deg,
-    rgba(58, 240, 140, 0.06) 0deg,
-    transparent 55deg,
+    rgba(58, 240, 140, 0.07) 0deg,
+    rgba(58, 240, 140, 0.02) 40deg,
+    transparent 60deg,
     transparent 360deg
   );
+  -webkit-mask-image: radial-gradient(circle, black 0%, black 45%, transparent 68%);
+  mask-image: radial-gradient(circle, black 0%, black 45%, transparent 68%);
   animation: sweep 9s linear infinite;
   mix-blend-mode: screen;
 }
 @keyframes sweep {
   to {
-    transform: rotate(360deg);
+    transform: translate(-50%, -50%) rotate(360deg);
   }
 }
 .kiosk-rail {

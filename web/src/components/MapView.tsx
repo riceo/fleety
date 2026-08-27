@@ -159,6 +159,24 @@ interface Props {
 // How stale a fix can be and still appear on the map at all.
 const MAP_MAX_AGE_MS = 24 * 3600 * 1000;
 
+// Dead reckoning: between pings an airborne aircraft glides along its last
+// track at its last groundspeed, so motion is continuous instead of stepping
+// every poll. Capped — beyond this we freeze at the last fix rather than
+// fabricate a position through a real coverage gap.
+const DEAD_RECKON_MAX_MS = 60_000;
+
+function projectedCoords(a: LiveAircraft, now: number): [number, number] {
+  const p = a.pos!;
+  if (a.status !== 'airborne' || p.gs == null || p.gs < 30 || p.track == null) return [p.lon, p.lat];
+  const ageMs = now - p.ts;
+  if (ageMs <= 0) return [p.lon, p.lat];
+  const distNm = (p.gs * Math.min(ageMs, DEAD_RECKON_MAX_MS)) / 3_600_000;
+  const rad = (p.track * Math.PI) / 180;
+  const lat = p.lat + (distNm * Math.cos(rad)) / 60;
+  const lon = p.lon + (distNm * Math.sin(rad)) / (60 * Math.cos((p.lat * Math.PI) / 180));
+  return [lon, lat];
+}
+
 // The fleet's "local cluster" for auto-fit: aircraft within this of the map
 // default centre. A guest jet 1,000nm away gets a focus button, not a zoom-out.
 const CLUSTER_RADIUS_DEG = 3;
@@ -172,6 +190,11 @@ export const MapView = forwardRef<MapViewHandle, Props>(function MapView(
   const readyRef = useRef(false);
   const fleetRef = useRef(fleet);
   fleetRef.current = fleet;
+  const selectedRef = useRef(selectedId);
+  selectedRef.current = selectedId ?? null;
+  const followRef = useRef(followId);
+  followRef.current = followId ?? null;
+  const syncDataRef = useRef<() => void>(() => {});
   const iconSigs = useRef(new Map<number, string>());
 
   const [centerLat, centerLon] = (config.mapCenter ?? '51.3519,0.5033').split(',').map(Number);
@@ -197,6 +220,22 @@ export const MapView = forwardRef<MapViewHandle, Props>(function MapView(
     // toggles, TV orientation changes).
     const ro = new ResizeObserver(() => map.resize());
     ro.observe(containerRef.current);
+
+    // Dead-reckoning tick: once a second, re-project airborne icons along
+    // their last track/speed so motion is continuous between pings — and keep
+    // follow mode gliding with the projection.
+    const drTick = setInterval(() => {
+      if (!readyRef.current || !mapRef.current) return;
+      if (!fleetRef.current.some((a) => a.status === 'airborne')) return;
+      syncDataRef.current();
+      const fid = followRef.current;
+      if (fid) {
+        const a = fleetRef.current.find((x) => x.id === fid);
+        if (a?.pos) {
+          mapRef.current.easeTo({ center: projectedCoords(a, Date.now()), duration: 950, easing: (t) => t });
+        }
+      }
+    }, 1000);
 
     map.on('load', () => {
       addAirfieldLayers(map, config.accent ?? '#e32636');
@@ -312,6 +351,7 @@ export const MapView = forwardRef<MapViewHandle, Props>(function MapView(
 
     return () => {
       readyRef.current = false;
+      clearInterval(drTick);
       ro.disconnect();
       map.remove();
       mapRef.current = null;
@@ -349,7 +389,7 @@ export const MapView = forwardRef<MapViewHandle, Props>(function MapView(
         const label = a.status === 'airborne' ? (a.liveCallsign ?? a.registration) : a.registration;
         return {
           type: 'Feature' as const,
-          geometry: { type: 'Point' as const, coordinates: [a.pos!.lon, a.pos!.lat] },
+          geometry: { type: 'Point' as const, coordinates: projectedCoords(a, now) },
           properties: {
             id: a.id,
             iconKey: `ac-${a.id}`,

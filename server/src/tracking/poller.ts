@@ -1,5 +1,5 @@
 import type { Database } from 'better-sqlite3';
-import type { AdsbProvider } from '../providers/index.js';
+import type { AdsbProvider, ProviderStates } from '../providers/index.js';
 import type { Settings } from '../settings.js';
 import type { LiveBus } from '../live/liveBus.js';
 import type { AircraftRow, NormPosition } from '../types.js';
@@ -8,6 +8,16 @@ import { activeNotesByClub } from '../annotations.js';
 
 const MAX_BACKOFF_MS = 5 * 60_000;
 const HEXES_PER_CALL = 100;
+// A sighting older than this doesn't count as "heard" for failover purposes —
+// a primary returning rotting cached records must not suppress a failover
+// that might have live data.
+const HEARD_FRESH_SEC = 60;
+// After a failover error, leave it alone for a while (a hanging failover must
+// not add its timeout to every cycle).
+const FAILOVER_COOLDOWN_MS = 60_000;
+// When the primary keeps failing while the failover rescues cycles, probe the
+// primary only every Nth cycle instead of hammering it at full cadence.
+const PRIMARY_PROBE_EVERY = 6;
 
 // ONE poller for the whole platform: every tracked hex across every club is
 // batched into shared upstream calls, so API load stays near-constant no
@@ -16,17 +26,24 @@ const HEXES_PER_CALL = 100;
 export class Poller {
   private lastTsByAircraft = new Map<number, number>();
   private consecutiveErrors = 0;
+  private primaryErrorStreak = 0;
+  private cycleCount = 0;
+  private failoverCursor = 0;
+  private failoverCooldownUntil = 0;
   private lastOkLogAt = 0;
+  private lastFailoverErrLogAt = 0;
   private lastDeadmanAt = 0;
   private timer: NodeJS.Timeout | null = null;
-  private stopped = false;
+  private running = false;
   lastPollAt = 0;
   lastPollOk = false;
   lastPollError: string | null = null;
 
   constructor(
     private db: Database,
-    private provider: AdsbProvider,
+    // providers[0] is the primary; providers[1] is the failover, queried only
+    // for hexes the primary didn't (freshly) hear.
+    private providers: AdsbProvider[],
     private settings: Settings,
     private detector: FlightDetector,
     private live: LiveBus
@@ -39,12 +56,12 @@ export class Poller {
   }
 
   start(): void {
-    this.stopped = false;
-    void this.cycle();
+    this.running = true;
+    void this.loop();
   }
 
   stop(): void {
-    this.stopped = true;
+    this.running = false;
     if (this.timer) clearTimeout(this.timer);
   }
 
@@ -61,7 +78,14 @@ export class Poller {
       .all() as AircraftRow[];
   }
 
-  private logPoll(ok: boolean, status: number | null, error: string | null, count: number, durationMs: number): void {
+  private logPoll(
+    providerName: string,
+    ok: boolean,
+    status: number | null,
+    error: string | null,
+    count: number,
+    durationMs: number
+  ): void {
     const now = Date.now();
     if (ok && now - this.lastOkLogAt < 60_000) return;
     if (ok) this.lastOkLogAt = now;
@@ -69,7 +93,7 @@ export class Poller {
       .prepare(
         'INSERT INTO poll_log (ts, provider, ok, status, error, aircraft_returned, duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?)'
       )
-      .run(now, this.provider.name, ok ? 1 : 0, status, error, count, durationMs);
+      .run(now, providerName, ok ? 1 : 0, status, error, count, durationMs);
   }
 
   private deadmanPing(): void {
@@ -119,19 +143,49 @@ export class Poller {
       );
   }
 
-  private async cycle(): Promise<void> {
-    if (this.stopped) return;
+  // Apply one provider batch: positions in a transaction (detector + storage +
+  // live), then presence fan-out (live-state only). Returns whether anything
+  // suggests an active flight.
+  private applyBatch(states: ProviderStates, byHex: Map<string, AircraftRow[]>): boolean {
+    let anyActive = false;
+    const apply = this.db.transaction(() => {
+      for (const p of states.positions) {
+        for (const ac of byHex.get(p.hex) ?? []) {
+          const lastTs = this.lastTsByAircraft.get(ac.id) ?? 0;
+          if (p.ts <= lastTs) continue; // stale fix repeated by the aggregator
+          const flightId = this.detector.onPosition({ id: ac.id, club_id: ac.club_id }, p);
+          this.insertPosition(ac.id, p, flightId);
+          this.lastTsByAircraft.set(ac.id, p.ts);
+          this.live.update(ac.club_id, ac.id, p, flightId);
+          if (flightId !== null && p.ts > Date.now() - 120_000) anyActive = true;
+        }
+      }
+    });
+    apply();
+    for (const pr of states.presences) {
+      for (const ac of byHex.get(pr.hex) ?? []) {
+        this.live.presence(ac.club_id, ac.id, pr.ts);
+      }
+    }
+    return anyActive;
+  }
+
+  // One full poll cycle. Public so tests can drive it directly.
+  async runCycle(): Promise<void> {
     const started = Date.now();
+    this.cycleCount++;
     let anyActive = false;
     try {
       const aircraft = this.trackedAircraft();
 
-      // Refresh each club's live roster.
+      // Every club syncs its roster — including clubs whose roster just
+      // emptied, so their removal deltas still go out.
       const byClub = new Map<number, AircraftRow[]>();
+      for (const c of this.db.prepare('SELECT id FROM clubs').all() as { id: number }[]) {
+        byClub.set(c.id, []);
+      }
       for (const a of aircraft) {
-        const list = byClub.get(a.club_id) ?? [];
-        list.push(a);
-        byClub.set(a.club_id, list);
+        byClub.get(a.club_id)?.push(a) ?? byClub.set(a.club_id, [a]);
       }
       for (const [clubId, rows] of byClub) this.live.syncAircraftList(clubId, rows);
 
@@ -146,30 +200,88 @@ export class Poller {
 
       if (byHex.size > 0) {
         const hexes = [...byHex.keys()];
-        const positions: NormPosition[] = [];
-        for (let i = 0; i < hexes.length; i += HEXES_PER_CALL) {
-          positions.push(...(await this.provider.fetchPositions(hexes.slice(i, i + HEXES_PER_CALL))));
+        const primary = this.providers[0];
+        const primaryStates: ProviderStates = { positions: [], presences: [] };
+        let primaryError: unknown = null;
+
+        // Soft backoff: a repeatedly failing primary (while the failover
+        // rescues) is probed occasionally, not hammered every cycle.
+        const probePrimary =
+          this.primaryErrorStreak < 3 || this.cycleCount % PRIMARY_PROBE_EVERY === 0;
+        if (probePrimary) {
+          try {
+            for (let i = 0; i < hexes.length; i += HEXES_PER_CALL) {
+              const chunk = await primary.fetchStates(hexes.slice(i, i + HEXES_PER_CALL));
+              primaryStates.positions.push(...chunk.positions);
+              primaryStates.presences.push(...chunk.presences);
+            }
+            this.primaryErrorStreak = 0;
+          } catch (err) {
+            primaryError = err;
+            this.primaryErrorStreak++;
+          }
+        } else {
+          primaryError = new Error('primary in soft backoff');
         }
-        const apply = this.db.transaction(() => {
-          for (const p of positions) {
-            for (const ac of byHex.get(p.hex) ?? []) {
-              const lastTs = this.lastTsByAircraft.get(ac.id) ?? 0;
-              if (p.ts <= lastTs) continue; // stale fix repeated by the aggregator
-              const flightId = this.detector.onPosition({ id: ac.id, club_id: ac.club_id }, p);
-              this.insertPosition(ac.id, p, flightId);
-              this.lastTsByAircraft.set(ac.id, p.ts);
-              this.live.update(ac.club_id, ac.id, p, flightId);
-              if (flightId !== null && p.ts > Date.now() - 120_000) anyActive = true;
+
+        // Apply the primary's data immediately — a slow failover must never
+        // delay fresh positions reaching the board.
+        anyActive = this.applyBatch(primaryStates, byHex) || anyActive;
+
+        // Failover: only for hexes the primary didn't FRESHLY hear (stale
+        // cached records don't count), rotating through the missing set so a
+        // >100-hex outage still covers everything across cycles.
+        const failover = this.providers[1];
+        const freshlyHeard = new Set([
+          ...primaryStates.positions.filter((p) => (p.seenPos ?? 0) <= HEARD_FRESH_SEC).map((p) => p.hex),
+          ...primaryStates.presences.filter((p) => p.seen <= HEARD_FRESH_SEC).map((p) => p.hex),
+        ]);
+        const missing = hexes.filter((h) => !freshlyHeard.has(h));
+        let rescued = false;
+        if (failover && missing.length > 0 && Date.now() >= this.failoverCooldownUntil) {
+          const start = this.failoverCursor % missing.length;
+          const window = missing.slice(start, start + HEXES_PER_CALL);
+          if (window.length < HEXES_PER_CALL && missing.length > window.length) {
+            window.push(...missing.slice(0, Math.min(HEXES_PER_CALL - window.length, start)));
+          }
+          this.failoverCursor = (start + HEXES_PER_CALL) % Math.max(missing.length, 1);
+          try {
+            const fo = await failover.fetchStates(window);
+            anyActive = this.applyBatch(fo, byHex) || anyActive;
+            rescued = fo.positions.length > 0 || fo.presences.length > 0;
+          } catch (foErr) {
+            this.failoverCooldownUntil = Date.now() + FAILOVER_COOLDOWN_MS;
+            if (Date.now() - this.lastFailoverErrLogAt > 5 * 60_000) {
+              this.lastFailoverErrLogAt = Date.now();
+              this.logPoll(failover.name, false, null, String(foErr), 0, Date.now() - started);
             }
           }
-          this.detector.tick(Date.now());
-        });
-        apply();
-        this.lastPollOk = true;
-        this.lastPollError = null;
-        this.consecutiveErrors = 0;
-        this.logPoll(true, 200, null, positions.length, Date.now() - started);
-        this.deadmanPing();
+        }
+
+        this.detector.tick(Date.now());
+
+        if (primaryError) {
+          // Honest logging: the primary failed — record it with its HTTP
+          // status; never credit it with the failover's data.
+          const status = (primaryError as { status?: number }).status ?? null;
+          this.logPoll(primary.name, false, status, String(primaryError), 0, Date.now() - started);
+          if (rescued || this.providers[1]) {
+            // The platform is still serving (or degraded but retrying):
+            // don't engage global backoff while a failover exists.
+            this.lastPollOk = rescued;
+            this.lastPollError = rescued ? null : String(primaryError);
+            this.consecutiveErrors = rescued ? 0 : this.consecutiveErrors;
+          } else {
+            throw primaryError;
+          }
+        } else {
+          this.lastPollOk = true;
+          this.lastPollError = null;
+          this.consecutiveErrors = 0;
+          this.logPoll(primary.name, true, 200, null, primaryStates.positions.length, Date.now() - started);
+          this.deadmanPing();
+        }
+        if (rescued) this.deadmanPing();
       } else {
         this.detector.tick(Date.now());
         this.lastPollOk = true;
@@ -180,7 +292,7 @@ export class Poller {
       this.lastPollOk = false;
       this.lastPollError = err instanceof Error ? err.message : String(err);
       const status = (err as { status?: number }).status ?? null;
-      this.logPoll(false, status, this.lastPollError, 0, Date.now() - started);
+      this.logPoll(this.providers[0]?.name ?? 'unknown', false, status, this.lastPollError, 0, Date.now() - started);
     }
     this.lastPollAt = Date.now();
 
@@ -189,6 +301,8 @@ export class Poller {
     }
     this.live.refreshStatuses();
     this.live.flush();
+    // Only the started loop schedules follow-ups (tests drive runCycle directly).
+    if (!this.running) return;
 
     const fast = this.settings.getNum('poll_fast_ms', 5000);
     const slow = this.settings.getNum('poll_slow_ms', 30000);
@@ -198,6 +312,11 @@ export class Poller {
     }
     // Jitter ±10% keeps us from syncing up with other pollers on the API.
     delay = Math.round(delay * (0.9 + Math.random() * 0.2));
-    this.timer = setTimeout(() => void this.cycle(), delay);
+    this.timer = setTimeout(() => void this.loop(), delay);
+  }
+
+  private async loop(): Promise<void> {
+    if (!this.running) return;
+    await this.runCycle();
   }
 }

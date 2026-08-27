@@ -50,6 +50,10 @@ function BoardCard({ a, focused }: { a: LiveAircraft; focused: boolean }) {
               {fmtGs(a.pos.gs)}
             </span>
           </div>
+        ) : a.status === 'awake' ? (
+          <div className="board-card-last mono-label">
+            TRANSPONDER LIVE{a.pos ? ` · LAST FIX ${fmtAgo(a.pos.ts).toUpperCase()}` : ' · AWAITING POSITION'}
+          </div>
         ) : (
           <div className="board-card-last mono-label">{a.pos ? `LAST CONTACT ${fmtAgo(a.pos.ts).toUpperCase()}` : 'NO RECENT CONTACT'}</div>
         )}
@@ -121,7 +125,10 @@ export function KioskPage() {
   }, [ready, live.lastEventAt]);
 
   const airborne = live.fleet.filter((a) => a.status === 'airborne');
-  const others = live.fleet.filter((a) => a.status !== 'airborne');
+  const rank = { awake: 0, ground: 1, offline: 2 } as Record<string, number>;
+  const others = [...live.fleet.filter((a) => a.status !== 'airborne')].sort(
+    (x, y) => (rank[x.status] ?? 3) - (rank[y.status] ?? 3)
+  );
 
   // A departure/landing steals focus immediately and holds it a while.
   useEffect(() => {

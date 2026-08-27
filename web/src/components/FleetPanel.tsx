@@ -3,7 +3,8 @@ import { displayCallsign, fmtAgo, fmtAlt, fmtGs } from '../format';
 import { isSparkly } from '../sparkle';
 
 export function StatusBadge({ status }: { status: LiveAircraft['status'] }) {
-  const label = status === 'airborne' ? 'Airborne' : status === 'ground' ? 'On stand' : 'No signal';
+  const label =
+    status === 'airborne' ? 'Airborne' : status === 'ground' ? 'On stand' : status === 'awake' ? 'Awake' : 'No signal';
   return (
     <span className={`badge badge-${status}`}>
       <span className="badge-dot" />
@@ -57,7 +58,14 @@ export function FlightStrip({
             </span>
           </div>
         )}
-        {!airborne && a.pos && <div className="strip-last mono-label">LAST CONTACT {fmtAgo(a.pos.ts).toUpperCase()}</div>}
+        {!airborne && a.status === 'awake' && (
+          <div className="strip-last mono-label">
+            TRANSPONDER LIVE{a.pos ? ` · LAST FIX ${fmtAgo(a.pos.ts).toUpperCase()}` : ' · AWAITING POSITION'}
+          </div>
+        )}
+        {!airborne && a.status !== 'awake' && a.pos && (
+          <div className="strip-last mono-label">LAST CONTACT {fmtAgo(a.pos.ts).toUpperCase()}</div>
+        )}
         {(a.note || a.tagline) && <div className="strip-note">{a.note ?? a.tagline}</div>}
       </div>
     </button>
@@ -73,9 +81,13 @@ export function FleetPanel({
   selectedId: number | null;
   onSelect: (id: number) => void;
 }) {
+  // Awake aircraft float to the top of their section (stable, so the admin
+  // sort order is preserved within each rank).
+  const rank = { awake: 0, ground: 1, offline: 2 } as Record<string, number>;
+  const byRank = (list: LiveAircraft[]) => [...list].sort((x, y) => (rank[x.status] ?? 3) - (rank[y.status] ?? 3));
   const airborne = fleet.filter((a) => a.status === 'airborne');
-  const ground = fleet.filter((a) => a.status !== 'airborne' && a.category === 'fleet');
-  const guests = fleet.filter((a) => a.status !== 'airborne' && a.category === 'guest');
+  const ground = byRank(fleet.filter((a) => a.status !== 'airborne' && a.category === 'fleet'));
+  const guests = byRank(fleet.filter((a) => a.status !== 'airborne' && a.category === 'guest'));
   return (
     <div className="strip-bay">
       <div className="bay-section">

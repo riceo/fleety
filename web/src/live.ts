@@ -47,8 +47,9 @@ export function useLiveFleet(enabled: boolean): LiveState {
     });
 
     es.addEventListener('delta', (ev) => {
-      const data = JSON.parse((ev as MessageEvent).data) as { aircraft: LiveDelta[] };
+      const data = JSON.parse((ev as MessageEvent).data) as { aircraft: LiveDelta[]; removed?: number[] };
       let needResync = false;
+      for (const id of data.removed ?? []) byId.current.delete(id);
       for (const d of data.aircraft) {
         const existing = byId.current.get(d.id);
         if (!existing) {

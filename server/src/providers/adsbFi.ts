@@ -2,9 +2,13 @@ import { config } from '../config.js';
 import { AdsbProvider, ProviderHttpError, type ProviderStates } from './index.js';
 import { normalizePresence, normalizeReadsb, type ReadsbAircraft } from './readsb.js';
 
-export class AdsbLolProvider implements AdsbProvider {
-  readonly name = 'adsb.lol';
-  private base = 'https://api.adsb.lol';
+// Failover aggregator — same readsb response shape, different feeder network,
+// so it sometimes hears aircraft adsb.lol can't. Polite budget: the poller
+// sends it at most one batched call per cycle, only for hexes the primary
+// returned nothing for.
+export class AdsbFiProvider implements AdsbProvider {
+  readonly name = 'adsb.fi';
+  private base = 'https://opendata.adsb.fi/api';
 
   async fetchStates(hexes: string[]): Promise<ProviderStates> {
     if (hexes.length === 0) return { positions: [], presences: [] };
@@ -13,7 +17,7 @@ export class AdsbLolProvider implements AdsbProvider {
       headers: { 'User-Agent': config.userAgent, Accept: 'application/json' },
       signal: AbortSignal.timeout(15000),
     });
-    if (!res.ok) throw new ProviderHttpError(res.status, `adsb.lol responded ${res.status}`);
+    if (!res.ok) throw new ProviderHttpError(res.status, `adsb.fi responded ${res.status}`);
     const body = (await res.json()) as { ac?: ReadsbAircraft[] };
     const pollTime = Date.now();
     const out: ProviderStates = { positions: [], presences: [] };

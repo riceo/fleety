@@ -30,7 +30,8 @@ export interface LiveAircraft {
   iconUrl: string | null;
   photoUrl: string | null;
   color: string;
-  status: 'airborne' | 'ground' | 'offline';
+  status: 'airborne' | 'ground' | 'awake' | 'offline';
+  awakeTs: number | null;
   note: string | null;
   flightId: number | null;
   pos: LivePos | null;

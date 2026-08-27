@@ -91,7 +91,19 @@ export interface FlightRow {
   created_at: number;
 }
 
-export type AircraftStatus = 'airborne' | 'ground' | 'offline';
+// A transponder sighting without a position — "awake" on the ground, the way
+// FR24 shows powered-up aircraft before taxi. Never persisted; live-state only.
+export interface NormPresence {
+  hex: string;
+  ts: number; // ms epoch = poll time - seen seconds
+  seen: number; // seconds since the aggregator last heard the transponder
+  callsign: string | null;
+  squawk: string | null;
+  onGround: boolean | null;
+  source: string;
+}
+
+export type AircraftStatus = 'airborne' | 'ground' | 'awake' | 'offline';
 
 export interface LiveAircraft {
   id: number;
@@ -110,6 +122,7 @@ export interface LiveAircraft {
   photoUrl: string | null;
   color: string;
   status: AircraftStatus;
+  awakeTs: number | null; // last transponder sighting (with or without position)
   note: string | null; // active kiosk annotation
   flightId: number | null;
   pos: {

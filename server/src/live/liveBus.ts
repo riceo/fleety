@@ -4,6 +4,8 @@ import type { AircraftRow, LiveAircraft, NormPosition } from '../types.js';
 const TRAIL_MAX_POINTS = 1500;
 const AIRBORNE_FRESH_MS = 5 * 60_000;
 const GROUND_FRESH_MS = 30 * 60_000;
+const AWAKE_FRESH_MS = 2 * 60_000; // transponder heard this recently => awake
+const AWAKE_DIRTY_MS = 60_000; // throttle steady-state awake deltas
 
 // Two audiences per club: members (and admins) see everything; the open site
 // and the kiosk TV see only aircraft whose visibility is 'public'.
@@ -37,6 +39,9 @@ class ClubChannel {
   nextEventId = 1;
   dirty = new Map<number, [number, number] | null>();
   trailResets = new Set<number>();
+  removed = new Map<number, 'public' | 'members'>(); // left roster (visibility at removal)
+  hiddenFromRestricted = new Set<number>(); // flipped public -> members
+  awakeEmitted = new Map<number, number>(); // last awakeTs actually sent to clients
 }
 
 export class LiveBus {
@@ -76,6 +81,7 @@ export class LiveBus {
         photoUrl: null,
         color: row.color,
         status: 'offline',
+        awakeTs: null,
         note: null,
         flightId: null,
         pos: null,
@@ -83,6 +89,8 @@ export class LiveBus {
       };
       const iconUrl = row.icon_path ? `/uploads/${row.icon_path}` : null;
       const photoUrl = row.photo_path ? `/uploads/${row.photo_path}` : null;
+      // Captured before mutation below — `existing` aliases `base`.
+      const prevVisibility = existing?.visibility;
       // Admin edits (colour, icon, tagline…) must reach connected boards
       // immediately, not on their next reconnect.
       const changed =
@@ -111,15 +119,45 @@ export class LiveBus {
       base.icon = row.icon;
       base.iconUrl = iconUrl;
       base.photoUrl = photoUrl;
+      // A visibility flip to members-only must actively remove the aircraft
+      // from restricted clients (kiosk/public) — they get a removal delta.
+      if (prevVisibility === 'public' && row.visibility === 'members') {
+        ch.hiddenFromRestricted.add(row.id);
+      }
       base.color = row.color;
-      if (!existing) ch.aircraft.set(row.id, base);
+      if (!existing) {
+        ch.aircraft.set(row.id, base);
+        // Newly added aircraft appear on connected boards immediately.
+        if (!ch.dirty.has(row.id)) ch.dirty.set(row.id, null);
+      }
       if (changed && !ch.dirty.has(row.id)) ch.dirty.set(row.id, null);
     }
     for (const id of [...ch.aircraft.keys()]) {
       if (!seen.has(id)) {
+        const gone = ch.aircraft.get(id)!;
         ch.aircraft.delete(id);
         ch.dirty.delete(id);
+        ch.awakeEmitted.delete(id);
+        ch.removed.set(id, gone.visibility);
       }
+    }
+  }
+
+  // Transponder sighting (with or without a position). Live-state only.
+  presence(clubId: number, aircraftId: number, ts: number): void {
+    const ch = this.channel(clubId);
+    const a = ch.aircraft.get(aircraftId);
+    if (!a) return;
+    if (a.awakeTs !== null && ts <= a.awakeTs) return; // monotonic guard
+    a.awakeTs = ts;
+    // Throttle against the last EMITTED value (not the stored one, which
+    // updates every poll): a parked transponder-on aircraft sends at most one
+    // delta per minute, and clients' awakeTs stays fresh instead of freezing
+    // at the first sighting. Status transitions still flush immediately.
+    const lastEmitted = ch.awakeEmitted.get(aircraftId) ?? 0;
+    if (ts - lastEmitted >= AWAKE_DIRTY_MS) {
+      ch.awakeEmitted.set(aircraftId, ts);
+      if (!ch.dirty.has(aircraftId)) ch.dirty.set(aircraftId, null);
     }
   }
 
@@ -154,6 +192,9 @@ export class LiveBus {
       squawk: p.squawk,
       onGround: p.onGround,
     };
+    // A position always implies presence (and this delta carries it).
+    if (p.ts > (a.awakeTs ?? 0)) a.awakeTs = p.ts;
+    ch.awakeEmitted.set(aircraftId, a.awakeTs ?? p.ts);
     let appended: [number, number] | null = null;
     if (flightId !== null) {
       appended = [p.lon, p.lat];
@@ -186,10 +227,14 @@ export class LiveBus {
   }
 
   private computeStatus(a: LiveAircraft, now: number): LiveAircraft['status'] {
-    if (!a.pos) return 'offline';
-    const age = now - a.pos.ts;
-    if (a.flightId !== null && age < AIRBORNE_FRESH_MS) return 'airborne';
-    if (age < GROUND_FRESH_MS) return 'ground';
+    const posAge = a.pos ? now - a.pos.ts : Infinity;
+    const awakeAge = a.awakeTs !== null ? now - a.awakeTs : Infinity;
+    if (a.flightId !== null && posAge < AIRBORNE_FRESH_MS) return 'airborne';
+    // A current fix outranks presence: richer information wins.
+    if (posAge < AIRBORNE_FRESH_MS) return 'ground';
+    // Transponder heard just now but no current fix: awake (FR24-style).
+    if (awakeAge < AWAKE_FRESH_MS) return 'awake';
+    if (posAge < GROUND_FRESH_MS) return 'ground';
     return 'offline';
   }
 
@@ -227,12 +272,20 @@ export class LiveBus {
         trailReset: ch.trailResets.has(id),
       });
     }
-    return JSON.stringify({ aircraft: changes });
+    // Restricted clients also remove aircraft that just went members-only —
+    // but never learn about roster removals of aircraft they could not see.
+    const rosterRemovals =
+      audience === 'restricted'
+        ? [...ch.removed.entries()].filter(([, vis]) => vis === 'public').map(([id]) => id)
+        : [...ch.removed.keys()];
+    const removed =
+      audience === 'restricted' ? [...rosterRemovals, ...ch.hiddenFromRestricted] : rosterRemovals;
+    return JSON.stringify({ aircraft: changes, removed });
   }
 
   flush(): void {
     for (const [clubId, ch] of this.channels) {
-      if (ch.dirty.size === 0) continue;
+      if (ch.dirty.size === 0 && ch.removed.size === 0 && ch.hiddenFromRestricted.size === 0) continue;
       const ids = [...ch.dirty.keys()];
       const ev: BufferedEvent = {
         id: ch.nextEventId++,
@@ -241,12 +294,14 @@ export class LiveBus {
       };
       ch.dirty.clear();
       ch.trailResets.clear();
+      ch.removed.clear();
+      ch.hiddenFromRestricted.clear();
       ch.ring.push(ev);
       if (ch.ring.length > 500) ch.ring.splice(0, ch.ring.length - 500);
       for (const c of this.clients.values()) {
         if (c.clubId !== clubId) continue;
         const payload = c.audience === 'member' ? ev.member : ev.restricted;
-        if (payload !== '{"aircraft":[]}') {
+        if (payload !== '{"aircraft":[],"removed":[]}') {
           c.res.write(`event: delta\nid: ${ev.id}\ndata: ${payload}\n\n`);
         }
       }

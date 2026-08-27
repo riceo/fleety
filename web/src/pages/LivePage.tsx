@@ -9,6 +9,7 @@ import { Ticker } from '../components/Ticker';
 import { displayCallsign, fmtAgo, fmtAlt, fmtGs } from '../format';
 import { useEventSound } from '../sound';
 import { isSparkly } from '../sparkle';
+import { useSwipeDismiss } from '../useSwipeDismiss';
 import { LandingPage } from './PlatformPage';
 
 export function LivePage() {
@@ -21,6 +22,12 @@ export function LivePage() {
   const [shared, setShared] = useState(false);
   const deepLinkDone = useRef(false);
   const mapRef = useRef<MapViewHandle>(null);
+  const targetRef = useRef<HTMLDivElement>(null);
+  const sheetRef = useRef<HTMLDivElement>(null);
+  // Hooks stay above the early returns; `select` is only called long after
+  // the render in which these closures were created.
+  const targetSwipe = useSwipeDismiss(targetRef, () => select(null));
+  const sheetSwipe = useSwipeDismiss(sheetRef, () => setSheetOpen(false));
 
   // Deep link (/ac/G-PSZB or /ac/INV09): select and follow the aircraft once
   // the fleet arrives.
@@ -120,11 +127,16 @@ export function LivePage() {
             followId={following ? selectedId : null}
           />
 
-          {/* Mobile bottom sheet toggle */}
-          <button className="sheet-toggle" onClick={() => setSheetOpen((v) => !v)}>
-            {sheetOpen ? 'CLOSE' : `FLEET ${airborneCount ? `· ${airborneCount} AIRBORNE` : ''}`}
-          </button>
-          <div className={`bottom-sheet${sheetOpen ? ' open' : ''}`}>
+          {/* Mobile bottom sheet toggle (yields to the target card) */}
+          {!selected && (
+            <button className="sheet-toggle" onClick={() => setSheetOpen((v) => !v)}>
+              {sheetOpen ? 'CLOSE' : `FLEET ${airborneCount ? `· ${airborneCount} AIRBORNE` : ''}`}
+            </button>
+          )}
+          <div ref={sheetRef} className={`bottom-sheet${sheetOpen ? ' open' : ''}`}>
+            <div className="sheet-grab" {...sheetSwipe}>
+              <span />
+            </div>
             <FleetPanel
               fleet={live.fleet}
               selectedId={selectedId}
@@ -136,7 +148,10 @@ export function LivePage() {
           </div>
 
           {selected && (
-            <div className={`target-panel${isSparkly(selected) ? ' sparkle' : ''}`}>
+            <div ref={targetRef} className={`target-panel${isSparkly(selected) ? ' sparkle' : ''}`}>
+              <div className="sheet-grab target-grab" {...targetSwipe}>
+                <span />
+              </div>
               <div className="target-head">
                 <span className="mono-label">TARGET DATA</span>
                 <button className="target-close" onClick={() => select(null)} aria-label="Close">

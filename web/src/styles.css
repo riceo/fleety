@@ -888,12 +888,62 @@ label.check {
   .bottom-sheet.open {
     transform: translateY(0);
   }
+  /* Target card docks at the bottom on phones — the map stays visible, the
+     ticker stays below, and the grab handle swipes it away. */
   .target-panel {
-    left: 12px;
-    right: 12px;
+    left: 8px;
+    right: 8px;
     width: auto;
-    top: 12px;
+    top: auto;
+    bottom: calc(44px + env(safe-area-inset-bottom));
+    max-height: min(62vh, 430px);
+    overflow-y: auto;
+    animation: target-rise 0.22s ease-out;
   }
+  .target-photo {
+    height: 84px;
+  }
+  .target-head {
+    padding-top: 0;
+  }
+  /* A phone is not a kiosk. */
+  .kiosk-launch {
+    display: none;
+  }
+  .target-panel .sheet-grab,
+  .bottom-sheet .sheet-grab {
+    display: flex;
+  }
+}
+
+@keyframes target-rise {
+  from {
+    transform: translateY(24px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+/* Grab handle for swipe-to-dismiss (shown on mobile only). */
+.sheet-grab {
+  display: none;
+  justify-content: center;
+  align-items: center;
+  padding: 0.5rem 0 0.3rem;
+  cursor: grab;
+  touch-action: none;
+}
+.sheet-grab span {
+  width: 42px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--line-strong);
+}
+.sheet-grab:active {
+  cursor: grabbing;
 }
 
 /* ---------- login ---------- */

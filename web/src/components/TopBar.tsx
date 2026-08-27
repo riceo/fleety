@@ -53,7 +53,7 @@ export function TopBar() {
       <div className="topbar-right">
         {(isAdmin(me) || me?.user?.role === 'member') && (
           <button
-            className="btn btn-ghost"
+            className="btn btn-ghost kiosk-launch"
             title="Full-screen board for a big display"
             onClick={() => {
               void document.documentElement.requestFullscreen?.().catch(() => {});

@@ -67,6 +67,7 @@ export interface AppConfig {
   publicMode?: boolean;
   logoUrl?: string | null;
   callsignRules?: CallsignRule[];
+  rescue?: boolean; // platform has an ADSBx rescue tier configured
 }
 
 export interface Me {

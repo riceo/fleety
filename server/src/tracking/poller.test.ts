@@ -136,6 +136,53 @@ describe('Poller', () => {
     expect(rescueCalls).toHaveLength(1);
   });
 
+  it('manual rescue probe bootstraps a flight that began inside a blackspot', async () => {
+    const w = world();
+    const acId = w.mkAc(w.clubA, 'aaaaaa');
+    const primary: AdsbProvider = { name: 'primary', fetchStates: async () => EMPTY };
+    const rescueCalls: string[][] = [];
+    const rescueProvider: AdsbProvider = {
+      name: 'adsbx',
+      fetchStates: async (hexes) => {
+        rescueCalls.push(hexes);
+        return { positions: [pos('aaaaaa', Date.now())], presences: [] };
+      },
+    };
+    const poller = new Poller(w.db, [primary], w.settings, w.detector, w.live, {
+      provider: rescueProvider,
+      monthlyBudget: 100,
+    });
+    await poller.runCycle();
+    // Never heard anywhere, no open flight: the automatic tier stays silent.
+    expect(rescueCalls).toHaveLength(0);
+
+    const res = await poller.manualRescue(acId);
+    expect(res).toMatchObject({ ok: true, found: true });
+    // The probe's position opened a flight — the automatic tier now owns it.
+    expect(w.detector.currentFlightId(acId)).not.toBeNull();
+    expect(JSON.parse(w.settings.get('adsbx_usage')).used).toBe(1);
+    expect(w.live.list(w.clubA, 'member')[0].pos).toBeTruthy();
+  });
+
+  it('manual rescue probe refuses without a configured tier and on empty budget', async () => {
+    const w = world();
+    const acId = w.mkAc(w.clubA, 'aaaaaa');
+    const primary: AdsbProvider = { name: 'primary', fetchStates: async () => EMPTY };
+    const bare = new Poller(w.db, [primary], w.settings, w.detector, w.live);
+    expect(await bare.manualRescue(acId)).toEqual({ ok: false, error: 'not_configured' });
+
+    const rescueProvider: AdsbProvider = { name: 'adsbx', fetchStates: async () => EMPTY };
+    const poller = new Poller(w.db, [primary], w.settings, w.detector, w.live, {
+      provider: rescueProvider,
+      monthlyBudget: 100,
+    });
+    const month = new Date().toISOString().slice(0, 7);
+    const day = new Date().toISOString().slice(0, 10);
+    w.settings.set('adsbx_usage', JSON.stringify({ month, used: 100, day, usedToday: 0 }));
+    expect(await poller.manualRescue(acId)).toEqual({ ok: false, error: 'budget_exhausted' });
+    expect(await poller.manualRescue(999999)).toEqual({ ok: false, error: 'unknown_aircraft' });
+  });
+
   it('rescue tier never exceeds the monthly budget', async () => {
     const w = world();
     w.mkAc(w.clubA, 'aaaaaa');

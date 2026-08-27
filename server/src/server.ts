@@ -295,6 +295,7 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
       publicMode: club.public_mode === 1,
       logoUrl: club.logo_path ? `/uploads/${club.logo_path}` : null,
       callsignRules: clubs.rules(club),
+      rescue: !!config.adsbxApiKey,
     };
   });
 
@@ -559,6 +560,30 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
       return { error: 'invalid_image' };
     }
   };
+
+  // Manual ADSBx probe — bootstraps rescue coverage for a flight that began
+  // inside a free-network blackspot. Spends real budget: admin-only, rate
+  // limited against double-clicks, and audited.
+  app.post(
+    '/api/admin/aircraft/:id/rescue-probe',
+    { config: { rateLimit: { max: 6, timeWindow: '1 minute' } } },
+    async (req, reply) => {
+      const club = clubOf(req, reply);
+      if (!club || !requireClubAdmin(req, reply, club)) return;
+      const ac = clubAircraft(club, Number((req.params as { id: string }).id)) as
+        | { id: number; registration: string }
+        | undefined;
+      if (!ac) return reply.code(404).send({ error: 'not_found' });
+      const res = await poller.manualRescue(ac.id);
+      if (!res.ok) {
+        const code =
+          res.error === 'budget_exhausted' ? 429 : res.error === 'provider_error' ? 502 : 400;
+        return reply.code(code).send({ error: res.error });
+      }
+      audit(req, 'aircraft.rescue_probe', `${ac.registration}: ${res.found ? 'contact' : 'no contact'}`);
+      return res;
+    }
+  );
 
   app.post('/api/admin/aircraft/:id/image', async (req, reply) => {
     const club = clubOf(req, reply);

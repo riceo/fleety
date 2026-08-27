@@ -254,6 +254,67 @@ export class Poller {
     }
   }
 
+  // Admin-triggered ADSBx probe for one aircraft. The automatic tier only
+  // fires for OPEN flights, so a flight that BEGINS inside a free-network
+  // blackspot never triggers it — this is the bootstrap: one manual hit that,
+  // if it finds the aircraft airborne, opens the flight and hands coverage to
+  // the automatic tier. Spends the same budget; bypasses the interval floor.
+  async manualRescue(aircraftId: number): Promise<
+    | { ok: true; found: boolean; posAgeSec: number | null; used: number; budget: number }
+    | { ok: false; error: 'not_configured' | 'unknown_aircraft' | 'budget_exhausted' | 'provider_error' }
+  > {
+    if (!this.rescue) return { ok: false, error: 'not_configured' };
+    const target = this.db
+      .prepare('SELECT * FROM aircraft WHERE id = ? AND deleted_at IS NULL')
+      .get(aircraftId) as AircraftRow | undefined;
+    if (!target) return { ok: false, error: 'unknown_aircraft' };
+    if (!this.rescueBudgetAllows(1)) return { ok: false, error: 'budget_exhausted' };
+
+    const hex = target.hex.toLowerCase();
+    // Fan out to every club tracking this airframe, like a normal cycle.
+    const sharing = this.db
+      .prepare('SELECT * FROM aircraft WHERE lower(hex) = ? AND deleted_at IS NULL AND enabled = 1')
+      .all(hex) as AircraftRow[];
+    const byHex = new Map<string, AircraftRow[]>([[hex, sharing.length > 0 ? sharing : [target]]]);
+
+    this.spendRescue(1); // RapidAPI meters attempts, so spend before the call
+    this.lastRescueProbe.set(hex, Date.now()); // automatic tier won't double-probe
+    const started = Date.now();
+    let states: ProviderStates;
+    try {
+      states = await this.rescue.provider.fetchStates([hex]);
+    } catch (err) {
+      this.db
+        .prepare(
+          'INSERT INTO poll_log (ts, provider, ok, status, error, aircraft_returned, duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?)'
+        )
+        .run(Date.now(), `${this.rescue.provider.name} (manual)`, 0, null, String(err), 0, Date.now() - started);
+      return { ok: false, error: 'provider_error' };
+    }
+    this.applyBatch(states, byHex);
+    this.detector.tick(Date.now());
+    this.live.refreshStatuses();
+    this.live.flush();
+    this.db
+      .prepare(
+        'INSERT INTO poll_log (ts, provider, ok, status, error, aircraft_returned, duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      )
+      .run(Date.now(), `${this.rescue.provider.name} (manual)`, 1, 200, null, states.positions.length, Date.now() - started);
+
+    const freshest = states.positions
+      .filter((p) => p.hex === hex)
+      .sort((a, b) => b.ts - a.ts)[0];
+    const presence = states.presences.find((p) => p.hex === hex);
+    const u = this.rescueUsage();
+    return {
+      ok: true,
+      found: !!freshest || !!presence,
+      posAgeSec: freshest ? Math.max(0, Math.round((Date.now() - freshest.ts) / 1000)) : null,
+      used: u.used,
+      budget: this.rescue.monthlyBudget,
+    };
+  }
+
   // One full poll cycle. Public so tests can drive it directly.
   async runCycle(): Promise<void> {
     const started = Date.now();

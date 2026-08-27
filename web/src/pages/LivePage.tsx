@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, Navigate, useParams } from 'react-router-dom';
-import { useAuth } from '../auth';
+import { isAdmin, useAuth } from '../auth';
+import { post } from '../api';
 import { useLiveFleet } from '../live';
 import { MapView, type MapViewHandle } from '../components/MapView';
 import { FleetPanel, StatusBadge } from '../components/FleetPanel';
@@ -19,6 +20,7 @@ export function LivePage() {
   const [following, setFollowing] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [shared, setShared] = useState(false);
+  const [probe, setProbe] = useState<'idle' | 'busy' | string>('idle');
   const deepLinkDone = useRef(false);
   const mapRef = useRef<MapViewHandle>(null);
 
@@ -59,6 +61,7 @@ export function LivePage() {
     setSelectedId(id);
     setFollowing(false);
     setShared(false);
+    setProbe('idle');
     // The address bar is the share link.
     if (id !== null) {
       const a = live.fleet.find((x) => x.id === id);
@@ -67,6 +70,29 @@ export function LivePage() {
     } else {
       window.history.replaceState(null, '', '/');
     }
+  };
+
+  // Manual ADSBx probe: bootstraps rescue tracking when a flight starts
+  // inside a free-network blackspot (the automatic tier needs an open flight).
+  const probeAdsbx = async (id: number) => {
+    setProbe('busy');
+    try {
+      const r = await post<{ found: boolean; posAgeSec: number | null }>(
+        `/api/admin/aircraft/${id}/rescue-probe`
+      );
+      setProbe(
+        r.found
+          ? `ADSBX CONTACT${r.posAgeSec != null ? ` · ${r.posAgeSec}s AGO` : ''} ✓`
+          : 'NO ADSBX CONTACT'
+      );
+    } catch (err) {
+      setProbe(
+        err instanceof Error && err.message === 'budget_exhausted'
+          ? 'ADSBX BUDGET SPENT'
+          : 'ADSBX CHECK FAILED'
+      );
+    }
+    setTimeout(() => setProbe('idle'), 5000);
   };
 
   const share = async (registration: string, label: string) => {
@@ -206,6 +232,16 @@ export function LivePage() {
                 >
                   {shared ? 'LINK COPIED ✓' : 'SHARE'}
                 </button>
+                {config?.rescue && isAdmin(me) && (
+                  <button
+                    className="btn small"
+                    disabled={probe === 'busy'}
+                    title="One paid ADSBexchange request — use when an aircraft is flying in a free-network blackspot"
+                    onClick={() => void probeAdsbx(selected.id)}
+                  >
+                    {probe === 'idle' ? 'CHECK ADSBX' : probe === 'busy' ? 'CHECKING…' : probe}
+                  </button>
+                )}
               </div>
             </div>
           )}

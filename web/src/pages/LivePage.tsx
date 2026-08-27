@@ -196,7 +196,7 @@ export function LivePage() {
                   </Link>
                 )}
                 <button
-                  className="btn btn-ghost small"
+                  className="btn small"
                   onClick={() =>
                     void share(
                       selected.registration,

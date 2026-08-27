@@ -233,7 +233,7 @@ function AircraftForm({ initial, onDone }: { initial: Partial<AdminAircraft>; on
       {f.category === 'guest' && (
         <div className="form-row">
           <label>
-            Track until (auto-disables after)
+            Track until — leave empty to keep the guest indefinitely
             <input type="date" value={f.track_until ?? ''} onChange={(e) => set('track_until', e.target.value || null)} />
           </label>
         </div>

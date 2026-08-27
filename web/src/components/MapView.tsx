@@ -4,6 +4,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import { api, type AppConfig, type LiveAircraft } from '../api';
 import { renderIcon, renderRoundel } from '../icons';
 import { isSparkly } from '../sparkle';
+import { displayCallsign } from '../format';
 
 const CLUB_BLUE = '#5b6bc4';
 
@@ -386,7 +387,12 @@ export const MapView = forwardRef<MapViewHandle, Props>(function MapView(
       .filter((a) => a.pos && now - a.pos.ts < MAP_MAX_AGE_MS)
       .map((a) => {
         const sparkle = isSparkly(a);
-        const label = a.status === 'airborne' ? (a.liveCallsign ?? a.registration) : a.registration;
+        // Airborne label prefers the transmitted callsign, then the admin
+        // callsign (spoken form) — matching the strips — then registration.
+        const label =
+          a.status === 'airborne'
+            ? displayCallsign(a.liveCallsign ?? a.callsign) || a.registration
+            : a.registration;
         return {
           type: 'Feature' as const,
           geometry: { type: 'Point' as const, coordinates: projectedCoords(a, now) },
@@ -417,6 +423,10 @@ export const MapView = forwardRef<MapViewHandle, Props>(function MapView(
       features: trails,
     });
   };
+
+  // The dead-reckoning tick calls syncData through this ref — reassigned every
+  // render so it always sees the current fleet/selection closures.
+  syncDataRef.current = syncData;
 
   useEffect(syncData, [fleet, selectedId]);
 

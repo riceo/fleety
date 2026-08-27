@@ -22,7 +22,9 @@ ENV NODE_ENV=production \
     DATA_DIR=/data \
     WEB_DIST=/app/web/dist \
     PORT=8080
-RUN useradd -r -u 10001 fleetview && mkdir -p /data && chown fleetview /data
+# curl is only here for platform healthchecks (Coolify probes with curl/wget)
+RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/* \
+    && useradd -r -u 10001 fleetview && mkdir -p /data && chown fleetview /data
 WORKDIR /app
 COPY --from=serverbuild /app/server/node_modules server/node_modules
 COPY --from=serverbuild /app/server/dist server/dist
@@ -31,5 +33,5 @@ COPY --from=webbuild /app/web/dist web/dist
 USER fleetview
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
-  CMD node -e "fetch('http://localhost:8080/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+  CMD curl -fsS "http://localhost:${PORT:-8080}/healthz" || exit 1
 CMD ["node", "server/dist/index.js"]

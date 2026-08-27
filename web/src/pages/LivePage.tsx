@@ -8,6 +8,7 @@ import { TopBar } from '../components/TopBar';
 import { Ticker } from '../components/Ticker';
 import { displayCallsign, fmtAgo, fmtAlt, fmtGs } from '../format';
 import { useEventSound } from '../sound';
+import { LandingPage } from './PlatformPage';
 
 export function LivePage() {
   const { me, config, loading } = useAuth();
@@ -21,7 +22,10 @@ export function LivePage() {
   const airborneCount = live.fleet.filter((a) => a.status === 'airborne').length;
   const [soundOn, toggleSound] = useEventSound('fv_sound_live', false, live.tickerEvent);
 
-  if (!loading && me && !me.user && !me.kiosk && !me.publicMode) {
+  if (!loading && config?.platform) {
+    return <LandingPage />;
+  }
+  if (!loading && me && !me.user?.role && !me.user?.platformAdmin && !me.kiosk && !me.publicMode) {
     return <Navigate to="/login" replace />;
   }
   if (loading || !config) {

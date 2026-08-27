@@ -37,7 +37,7 @@ export function ReplayPage() {
     if (!mapDiv.current || !config || points.length === 0 || mapRef.current) return;
     const map = new maplibregl.Map({
       container: mapDiv.current,
-      style: config.tileStyleUrl,
+      style: config.tileStyleUrl ?? 'https://tiles.openfreemap.org/styles/dark',
       center: [points[0][0], points[0][1]],
       zoom: 10,
       attributionControl: { compact: true },
@@ -149,7 +149,7 @@ export function ReplayPage() {
     return `${flight.gap_count} coverage gap${flight.gap_count > 1 ? 's' : ''} (${fmtDuration(flight.gap_seconds * 1000)}) — light aircraft drop out of receiver coverage at low level`;
   }, [flight]);
 
-  if (!loading && me && !me.user && !me.publicMode) return <Navigate to="/login" replace />;
+  if (!loading && me && !me.user?.role && !me.user?.platformAdmin && !me.publicMode) return <Navigate to="/login" replace />;
   if (missing) {
     return (
       <div className="app-shell">

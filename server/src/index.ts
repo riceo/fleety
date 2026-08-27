@@ -10,7 +10,8 @@ import { FlightDetector } from './tracking/flightDetector.js';
 import { Poller } from './tracking/poller.js';
 import { AdsbLolProvider } from './providers/adsbLol.js';
 import { lookupRouteForFlight } from './enrichment/lookup.js';
-import { onLanding, onTakeoff } from './annotations.js';
+import { onLanding, onTakeoff, type TickerEmit } from './annotations.js';
+import { Clubs } from './clubs.js';
 import { buildServer } from './server.js';
 import { scheduleNightly } from './retention.js';
 
@@ -20,16 +21,17 @@ async function main() {
   const db = getDb();
   await seed(db);
   const settings = new Settings(db);
+  const clubs = new Clubs(db);
   const live = new LiveBus();
 
-  const emitTicker = (ev: Parameters<typeof live.broadcastTicker>[0]) => live.broadcastTicker(ev);
+  const emitTicker: TickerEmit = (ev) => live.broadcastTicker(ev.clubId, ev);
   const detector = new FlightDetector(db, {}, {
-    onFlightStarted: (flightId, aircraftId, callsign) => {
-      onTakeoff(db, flightId, aircraftId, emitTicker);
+    onFlightStarted: (flightId, aircraft, callsign) => {
+      onTakeoff(db, flightId, aircraft.id, emitTicker);
       void lookupRouteForFlight(db, flightId, callsign);
     },
-    onFlightEnded: (flightId, aircraftId) => {
-      onLanding(db, flightId, aircraftId, emitTicker);
+    onFlightEnded: (flightId, aircraft) => {
+      onLanding(db, flightId, aircraft.id, emitTicker);
     },
   });
 
@@ -37,13 +39,15 @@ async function main() {
 
   // Rehydrate live trails for flights that were open when we last stopped.
   const openFlights = db
-    .prepare('SELECT id, aircraft_id FROM flights WHERE ended_at IS NULL')
-    .all() as { id: number; aircraft_id: number }[];
+    .prepare(
+      'SELECT f.id, f.aircraft_id, a.club_id FROM flights f JOIN aircraft a ON a.id = f.aircraft_id WHERE f.ended_at IS NULL'
+    )
+    .all() as { id: number; aircraft_id: number; club_id: number }[];
   for (const f of openFlights) {
     const pts = db
       .prepare('SELECT lon, lat FROM positions WHERE flight_id = ? ORDER BY ts DESC LIMIT 1500')
       .all(f.id) as { lon: number; lat: number }[];
-    live.seedTrail(f.aircraft_id, f.id, pts.reverse().map((p) => [p.lon, p.lat]));
+    live.seedTrail(f.club_id, f.aircraft_id, f.id, pts.reverse().map((p) => [p.lon, p.lat]));
   }
 
   const webDistCandidates = [
@@ -53,7 +57,22 @@ async function main() {
   ].filter((p): p is string => !!p);
   const webDist = webDistCandidates.find((p) => fs.existsSync(path.join(p, 'index.html'))) ?? webDistCandidates[1];
 
-  const app = await buildServer({ db, settings, live, poller, detector, webDist });
+  // Founding-club nicety: Invicta's logo ships with the app — install it into
+  // the club record on first boot if no logo has been uploaded yet.
+  const invicta = clubs.slug('invicta');
+  if (invicta && !invicta.logo_path) {
+    const bundled = path.join(webDist, 'invicta-logo.png');
+    if (fs.existsSync(bundled)) {
+      const uploads = path.join(config.dataDir, 'uploads');
+      fs.mkdirSync(uploads, { recursive: true });
+      const name = `club-${invicta.id}-logo-bundled.png`;
+      fs.copyFileSync(bundled, path.join(uploads, name));
+      db.prepare('UPDATE clubs SET logo_path = ? WHERE id = ?').run(name, invicta.id);
+      clubs.reload();
+    }
+  }
+
+  const app = await buildServer({ db, settings, live, poller, detector, clubs, webDist });
 
   poller.start();
   const heartbeat = setInterval(() => live.heartbeat(), 25_000);
@@ -72,7 +91,7 @@ async function main() {
   process.on('SIGINT', () => void shutdown('SIGINT'));
 
   await app.listen({ port: config.port, host: config.host });
-  app.log.info(`FleetView listening on :${config.port}, serving web from ${webDist}`);
+  app.log.info(`Fleety listening on :${config.port}, serving web from ${webDist}`);
 }
 
 main().catch((err) => {

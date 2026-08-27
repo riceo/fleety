@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { ApiError, post } from '../api';
 import { useAuth } from '../auth';
 import { Brand } from '../components/TopBar';
@@ -7,12 +7,12 @@ import { Brand } from '../components/TopBar';
 export function LoginPage() {
   const { me, config, refresh } = useAuth();
   const navigate = useNavigate();
-  const [username, setUsername] = useState('');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [current, setCurrent] = useState('');
   const [next, setNext] = useState('');
   const [confirm, setConfirm] = useState('');
   const [error, setError] = useState('');
+  const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
 
   const mustChange = me?.user?.mustChangePassword;
@@ -22,18 +22,28 @@ export function LoginPage() {
     setBusy(true);
     setError('');
     try {
-      const res = await post<{ user: { mustChangePassword: boolean } }>('/api/login', { username, password });
+      const res = await post<{ mustChangePassword: boolean }>('/api/login', { email, password });
       await refresh();
-      if (!res.user.mustChangePassword) navigate('/');
+      if (!res.mustChangePassword) navigate('/');
     } catch (err) {
       setError(
         err instanceof ApiError && err.code === 'invalid_credentials'
-          ? 'Wrong username or password.'
+          ? 'Wrong email or password.'
           : 'Sign-in failed — try again.'
       );
     } finally {
       setBusy(false);
     }
+  };
+
+  const forgot = async () => {
+    if (!email) {
+      setError('Enter your email first, then press “Forgot password”.');
+      return;
+    }
+    setError('');
+    await post('/api/forgot-password', { email }).catch(() => {});
+    setNote('If that address has an account, a reset link is on its way.');
   };
 
   const changePassword = async (e: FormEvent) => {
@@ -45,7 +55,7 @@ export function LoginPage() {
     setBusy(true);
     setError('');
     try {
-      await post('/api/change-password', { current: current || password, next });
+      await post('/api/change-password', { current: password, next });
       await refresh();
       navigate('/');
     } catch (err) {
@@ -62,27 +72,19 @@ export function LoginPage() {
   return (
     <div className="login-page">
       <div className="login-card">
-        <Brand siteName={config?.siteName ?? 'FleetView'} logoUrl={config?.logoUrl} />
+        <Brand config={config} />
         {mustChange ? (
           <>
             <h2>Set a new password</h2>
-            <p className="muted">Your password was set by an admin — choose your own before continuing.</p>
+            <p className="muted small center">Your password was set by an admin — choose your own before continuing.</p>
             <form onSubmit={(e) => void changePassword(e)}>
-              {!password && (
-                <input
-                  type="password"
-                  placeholder="Current password"
-                  value={current}
-                  onChange={(e) => setCurrent(e.target.value)}
-                  autoComplete="current-password"
-                />
-              )}
               <input
                 type="password"
                 placeholder="New password (min 8 characters)"
                 value={next}
                 onChange={(e) => setNext(e.target.value)}
                 autoComplete="new-password"
+                autoFocus
               />
               <input
                 type="password"
@@ -102,10 +104,11 @@ export function LoginPage() {
             <h2>Member sign in</h2>
             <form onSubmit={(e) => void login(e)}>
               <input
-                placeholder="Username"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                autoComplete="username"
+                type="email"
+                placeholder="Email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                autoComplete="email"
                 autoFocus
               />
               <input
@@ -116,17 +119,86 @@ export function LoginPage() {
                 autoComplete="current-password"
               />
               {error && <p className="form-error">{error}</p>}
+              {note && <p className="muted small">{note}</p>}
               <button className="btn btn-primary" disabled={busy}>
                 {busy ? 'Signing in…' : 'Sign in'}
+              </button>
+              <button type="button" className="btn btn-ghost small" onClick={() => void forgot()}>
+                Forgot password
               </button>
             </form>
             {config?.publicMode && (
               <p className="muted small center">
-                Or <a href="/">continue to the public map</a>.
+                Or <a href="/">continue to the public board</a>.
               </p>
             )}
           </>
         )}
+      </div>
+    </div>
+  );
+}
+
+// Invite / reset link landing: /set-password?token=…
+export function SetPasswordPage() {
+  const { config, refresh } = useAuth();
+  const navigate = useNavigate();
+  const [params] = useSearchParams();
+  const token = params.get('token') ?? '';
+  const [next, setNext] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (next !== confirm) {
+      setError('Passwords do not match.');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    try {
+      await post('/api/set-password', { token, password: next });
+      await refresh();
+      navigate('/');
+    } catch (err) {
+      setError(
+        err instanceof ApiError && err.code === 'invalid_token'
+          ? 'This link has expired or was already used — ask your club admin for a new one.'
+          : 'Password must be at least 8 characters.'
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="login-page">
+      <div className="login-card">
+        <Brand config={config} />
+        <h2>Choose your password</h2>
+        <form onSubmit={(e) => void submit(e)}>
+          <input
+            type="password"
+            placeholder="New password (min 8 characters)"
+            value={next}
+            onChange={(e) => setNext(e.target.value)}
+            autoComplete="new-password"
+            autoFocus
+          />
+          <input
+            type="password"
+            placeholder="Repeat password"
+            value={confirm}
+            onChange={(e) => setConfirm(e.target.value)}
+            autoComplete="new-password"
+          />
+          {error && <p className="form-error">{error}</p>}
+          <button className="btn btn-primary" disabled={busy || !token}>
+            {busy ? 'Saving…' : 'Set password and sign in'}
+          </button>
+        </form>
       </div>
     </div>
   );

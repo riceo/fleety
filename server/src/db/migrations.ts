@@ -190,6 +190,84 @@ UPDATE settings SET value = 'https://tiles.openfreemap.org/styles/dark'
   WHERE key = 'tile_style_url' AND value = 'https://tiles.openfreemap.org/styles/liberty';
 `,
   },
+  {
+    // Fleety: multi-tenant. Clubs own aircraft/airfields/branding; users are
+    // global with per-club memberships. The existing installation becomes
+    // club #1 ("invicta"), carrying over its branding settings.
+    id: 5,
+    sql: `
+CREATE TABLE clubs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  slug TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  name TEXT NOT NULL,
+  subheading TEXT NOT NULL DEFAULT 'OPERATIONS BOARD',
+  theme TEXT NOT NULL DEFAULT 'ops',
+  accent TEXT NOT NULL DEFAULT '#e32636',
+  logo_path TEXT,
+  map_center TEXT NOT NULL DEFAULT '51.3519,0.5033',
+  map_zoom REAL NOT NULL DEFAULT 9,
+  tile_style_url TEXT NOT NULL DEFAULT 'https://tiles.openfreemap.org/styles/dark',
+  public_mode INTEGER NOT NULL DEFAULT 0,
+  kiosk_token TEXT NOT NULL,
+  callsign_rules TEXT NOT NULL DEFAULT '[]',
+  created_at INTEGER NOT NULL
+);
+
+INSERT INTO clubs (slug, name, subheading, logo_path, map_center, map_zoom, tile_style_url, public_mode, kiosk_token, callsign_rules, created_at)
+SELECT
+  'invicta',
+  COALESCE((SELECT value FROM settings WHERE key = 'site_name'), 'Invicta FleetView'),
+  'OPERATIONS BOARD',
+  NULLIF((SELECT value FROM settings WHERE key = 'logo_path'), ''),
+  COALESCE((SELECT value FROM settings WHERE key = 'map_center'), '51.3519,0.5033'),
+  COALESCE(CAST((SELECT value FROM settings WHERE key = 'map_zoom') AS REAL), 9),
+  COALESCE((SELECT value FROM settings WHERE key = 'tile_style_url'), 'https://tiles.openfreemap.org/styles/dark'),
+  COALESCE(CAST((SELECT value FROM settings WHERE key = 'public_mode') AS INTEGER), 0),
+  COALESCE((SELECT value FROM settings WHERE key = 'kiosk_token'), lower(hex(randomblob(18)))),
+  '[{"prefix":"INV","spoken":"INVICTA"}]',
+  ${Date.now()};
+
+ALTER TABLE aircraft ADD COLUMN club_id INTEGER REFERENCES clubs(id);
+UPDATE aircraft SET club_id = 1;
+DROP INDEX idx_aircraft_hex_active;
+CREATE UNIQUE INDEX idx_aircraft_hex_active ON aircraft(club_id, hex) WHERE deleted_at IS NULL;
+
+ALTER TABLE airfields ADD COLUMN club_id INTEGER REFERENCES clubs(id);
+UPDATE airfields SET club_id = 1;
+
+ALTER TABLE ticker_events ADD COLUMN club_id INTEGER REFERENCES clubs(id);
+UPDATE ticker_events SET club_id = 1;
+
+ALTER TABLE sessions ADD COLUMN club_id INTEGER REFERENCES clubs(id);
+UPDATE sessions SET club_id = 1 WHERE kind = 'kiosk';
+
+ALTER TABLE audit_log ADD COLUMN club_id INTEGER REFERENCES clubs(id);
+
+ALTER TABLE users ADD COLUMN email TEXT COLLATE NOCASE;
+ALTER TABLE users ADD COLUMN platform_admin INTEGER NOT NULL DEFAULT 0;
+CREATE UNIQUE INDEX idx_users_email ON users(email) WHERE email IS NOT NULL;
+UPDATE users SET platform_admin = 1 WHERE role = 'admin';
+
+CREATE TABLE memberships (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  club_id INTEGER NOT NULL REFERENCES clubs(id) ON DELETE CASCADE,
+  role TEXT NOT NULL DEFAULT 'member' CHECK(role IN ('member','admin')),
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (user_id, club_id)
+);
+INSERT INTO memberships (user_id, club_id, role, created_at)
+SELECT id, 1, role, ${Date.now()} FROM users;
+
+CREATE TABLE login_tokens (
+  id TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  purpose TEXT NOT NULL CHECK(purpose IN ('invite','reset')),
+  club_id INTEGER REFERENCES clubs(id),
+  expires_at INTEGER NOT NULL,
+  used_at INTEGER
+);
+`,
+  },
 ];
 
 export function migrate(db: Database): void {

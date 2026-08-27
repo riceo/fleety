@@ -5,7 +5,7 @@ import { useLiveFleet } from '../live';
 import { MapView, type MapViewHandle } from '../components/MapView';
 import { StatusBadge } from '../components/FleetPanel';
 import { Ticker } from '../components/Ticker';
-import { DEFAULT_LOGO } from '../components/TopBar';
+import { FleetyMark } from '../components/TopBar';
 import { displayCallsign, fmtAgo, fmtAlt, fmtGs, fmtTime, fmtTimeUTC } from '../format';
 import { useEventSound } from '../sound';
 
@@ -170,10 +170,10 @@ export function KioskPage() {
     <div className="kiosk">
       <header className="kiosk-header">
         <div className="brand">
-          <img src={config.logoUrl || DEFAULT_LOGO} alt="" className="brand-logo" />
+          {config.logoUrl ? <img src={config.logoUrl} alt="" className="brand-logo" /> : <FleetyMark />}
           <span className="brand-name">
             {config.siteName.toUpperCase()}
-            <span className="brand-sub">OPERATIONS BOARD</span>
+            {config.subheading && <span className="brand-sub">{config.subheading.toUpperCase()}</span>}
           </span>
         </div>
         <div className="kiosk-status">

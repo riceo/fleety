@@ -4,8 +4,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import { api, type AppConfig, type LiveAircraft } from '../api';
 import { renderIcon, renderRoundel } from '../icons';
 
-const INVICTA_RED = '#e32636';
-const INVICTA_BLUE = '#5b6bc4';
+const CLUB_BLUE = '#5b6bc4';
 
 type EuAirport = [ident: string, name: string, lat: number, lon: number, kind: number];
 
@@ -21,9 +20,9 @@ interface ClubAirfield {
 // Airfield layers: the full European dataset fades in with zoom; the club's
 // own airfields are always-on branded markers, with Rochester/Lydd (bases)
 // most prominent.
-function addAirfieldLayers(map: maplibregl.Map): void {
-  map.addImage('af-base', renderRoundel(17, INVICTA_RED, '#ffffff', '#ffffff'), { pixelRatio: 2 });
-  map.addImage('af-club', renderRoundel(12, INVICTA_BLUE, '#ffffff', '#ffffff'), { pixelRatio: 2 });
+function addAirfieldLayers(map: maplibregl.Map, accent: string): void {
+  map.addImage('af-base', renderRoundel(17, accent, '#ffffff', '#ffffff'), { pixelRatio: 2 });
+  map.addImage('af-club', renderRoundel(12, CLUB_BLUE, '#ffffff', '#ffffff'), { pixelRatio: 2 });
 
   map.addSource('eu-airports', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
   map.addSource('club-airfields', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
@@ -100,7 +99,7 @@ function addAirfieldLayers(map: maplibregl.Map): void {
       'text-max-width': 9,
     },
     paint: {
-      'text-color': ['case', ['==', ['get', 'isBase'], 1], '#ff5561', '#93a4de'],
+      'text-color': ['case', ['==', ['get', 'isBase'], 1], accent, '#93a4de'],
       'text-halo-color': 'rgba(5,8,16,0.9)',
       'text-halo-width': 1.6,
     },
@@ -170,7 +169,7 @@ export const MapView = forwardRef<MapViewHandle, Props>(function MapView(
   fleetRef.current = fleet;
   const iconSigs = useRef(new Map<number, string>());
 
-  const [centerLat, centerLon] = config.mapCenter.split(',').map(Number);
+  const [centerLat, centerLon] = (config.mapCenter ?? '51.3519,0.5033').split(',').map(Number);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -179,7 +178,7 @@ export const MapView = forwardRef<MapViewHandle, Props>(function MapView(
     // labels/icons anywhere) — only set kiosk overrides when they apply.
     const map = new maplibregl.Map({
       container: containerRef.current,
-      style: config.tileStyleUrl,
+      style: config.tileStyleUrl ?? 'https://tiles.openfreemap.org/styles/dark',
       center: [centerLon || 0.5, centerLat || 51.35],
       zoom: config.mapZoom || 9,
       attributionControl: { compact: true },
@@ -195,7 +194,7 @@ export const MapView = forwardRef<MapViewHandle, Props>(function MapView(
     ro.observe(containerRef.current);
 
     map.on('load', () => {
-      addAirfieldLayers(map);
+      addAirfieldLayers(map, config.accent ?? '#e32636');
       map.addSource('trails', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
       map.addSource('aircraft', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
       map.addLayer({

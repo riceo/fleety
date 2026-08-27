@@ -5,13 +5,14 @@ const TRAIL_MAX_POINTS = 1500;
 const AIRBORNE_FRESH_MS = 5 * 60_000;
 const GROUND_FRESH_MS = 30 * 60_000;
 
-// Two audiences: members (and admins) see everything; the open site and the
-// kiosk TV see only aircraft whose visibility is 'public'.
+// Two audiences per club: members (and admins) see everything; the open site
+// and the kiosk TV see only aircraft whose visibility is 'public'.
 export type Audience = 'member' | 'restricted';
 
 interface SseClient {
   id: number;
   res: ServerResponse;
+  clubId: number;
   audience: Audience;
   authenticated: boolean; // false = riding on public_mode
 }
@@ -22,20 +23,42 @@ interface BufferedEvent {
   restricted: string;
 }
 
+export interface TickerBroadcast {
+  ts: number;
+  text: string;
+  aircraftId: number | null;
+  visibility: 'public' | 'members';
+}
+
+// One channel per club — snapshot/delta state, ring buffer, and its clients.
+class ClubChannel {
+  aircraft = new Map<number, LiveAircraft>();
+  ring: BufferedEvent[] = [];
+  nextEventId = 1;
+  dirty = new Map<number, [number, number] | null>();
+  trailResets = new Set<number>();
+}
+
 export class LiveBus {
-  private aircraft = new Map<number, LiveAircraft>();
+  private channels = new Map<number, ClubChannel>();
   private clients = new Map<number, SseClient>();
   private nextClientId = 1;
-  private nextEventId = 1;
-  private ring: BufferedEvent[] = [];
-  private dirty = new Map<number, [number, number] | null>(); // aircraftId -> trailAppend
-  private trailResets = new Set<number>();
 
-  syncAircraftList(rows: (AircraftRow & { status?: never })[]): void {
+  private channel(clubId: number): ClubChannel {
+    let ch = this.channels.get(clubId);
+    if (!ch) {
+      ch = new ClubChannel();
+      this.channels.set(clubId, ch);
+    }
+    return ch;
+  }
+
+  syncAircraftList(clubId: number, rows: AircraftRow[]): void {
+    const ch = this.channel(clubId);
     const seen = new Set<number>();
     for (const row of rows) {
       seen.add(row.id);
-      const existing = this.aircraft.get(row.id);
+      const existing = ch.aircraft.get(row.id);
       const base: LiveAircraft = existing ?? {
         id: row.id,
         hex: row.hex,
@@ -69,29 +92,30 @@ export class LiveBus {
       base.iconUrl = row.icon_path ? `/uploads/${row.icon_path}` : null;
       base.photoUrl = row.photo_path ? `/uploads/${row.photo_path}` : null;
       base.color = row.color;
-      if (!existing) this.aircraft.set(row.id, base);
+      if (!existing) ch.aircraft.set(row.id, base);
     }
-    for (const id of [...this.aircraft.keys()]) {
+    for (const id of [...ch.aircraft.keys()]) {
       if (!seen.has(id)) {
-        this.aircraft.delete(id);
-        this.dirty.delete(id);
+        ch.aircraft.delete(id);
+        ch.dirty.delete(id);
       }
     }
   }
 
-  seedTrail(aircraftId: number, flightId: number, points: [number, number][]): void {
-    const a = this.aircraft.get(aircraftId);
+  seedTrail(clubId: number, aircraftId: number, flightId: number, points: [number, number][]): void {
+    const a = this.channel(clubId).aircraft.get(aircraftId);
     if (!a) return;
     a.flightId = flightId;
     a.trail = points.slice(-TRAIL_MAX_POINTS);
   }
 
-  update(aircraftId: number, p: NormPosition, flightId: number | null): void {
-    const a = this.aircraft.get(aircraftId);
+  update(clubId: number, aircraftId: number, p: NormPosition, flightId: number | null): void {
+    const ch = this.channel(clubId);
+    const a = ch.aircraft.get(aircraftId);
     if (!a) return;
     if (a.flightId !== flightId) {
       a.trail = [];
-      this.trailResets.add(aircraftId);
+      ch.trailResets.add(aircraftId);
     }
     a.flightId = flightId;
     a.liveCallsign = p.callsign ?? a.liveCallsign;
@@ -115,7 +139,29 @@ export class LiveBus {
       a.trail.push(appended);
       if (a.trail.length > TRAIL_MAX_POINTS) a.trail.splice(0, a.trail.length - TRAIL_MAX_POINTS);
     }
-    this.dirty.set(aircraftId, appended);
+    ch.dirty.set(aircraftId, appended);
+  }
+
+  // A departure/landing/broadcast for one club: push to that club's clients so
+  // tickers refresh and the board snaps focus — respecting visibility.
+  broadcastTicker(clubId: number, ev: TickerBroadcast): void {
+    const payload = JSON.stringify({ ts: ev.ts, text: ev.text, aircraftId: ev.aircraftId });
+    for (const c of this.clients.values()) {
+      if (c.clubId !== clubId) continue;
+      if (ev.visibility === 'members' && c.audience !== 'member') continue;
+      c.res.write(`event: ticker\ndata: ${payload}\n\n`);
+    }
+  }
+
+  setNotes(clubId: number, notes: Map<number, string>): void {
+    const ch = this.channel(clubId);
+    for (const a of ch.aircraft.values()) {
+      const note = notes.get(a.id) ?? null;
+      if (note !== a.note) {
+        a.note = note;
+        if (!ch.dirty.has(a.id)) ch.dirty.set(a.id, null);
+      }
+    }
   }
 
   private computeStatus(a: LiveAircraft, now: number): LiveAircraft['status'] {
@@ -126,102 +172,90 @@ export class LiveBus {
     return 'offline';
   }
 
-  // A departure/landing just happened: push it to live clients so tickers
-  // refresh and the board snaps focus — respecting per-aircraft visibility.
-  broadcastTicker(ev: { ts: number; text: string; aircraftId: number | null; visibility: 'public' | 'members' }): void {
-    const payload = JSON.stringify({ ts: ev.ts, text: ev.text, aircraftId: ev.aircraftId });
-    for (const c of this.clients.values()) {
-      if (ev.visibility === 'members' && c.audience !== 'member') continue;
-      c.res.write(`event: ticker\ndata: ${payload}\n\n`);
-    }
-  }
-
-  // Kiosk annotations: sync the active note per aircraft; changes are pushed.
-  setNotes(notes: Map<number, string>): void {
-    for (const a of this.aircraft.values()) {
-      const note = notes.get(a.id) ?? null;
-      if (note !== a.note) {
-        a.note = note;
-        if (!this.dirty.has(a.id)) this.dirty.set(a.id, null);
-      }
-    }
-  }
-
-  // Re-derive statuses; any change marks the aircraft dirty so clients hear
-  // about aircraft going offline even with no new data.
   refreshStatuses(now = Date.now()): void {
-    for (const a of this.aircraft.values()) {
-      const status = this.computeStatus(a, now);
-      if (status !== a.status) {
-        a.status = status;
-        if (!this.dirty.has(a.id)) this.dirty.set(a.id, null);
+    for (const ch of this.channels.values()) {
+      for (const a of ch.aircraft.values()) {
+        const status = this.computeStatus(a, now);
+        if (status !== a.status) {
+          a.status = status;
+          if (!ch.dirty.has(a.id)) ch.dirty.set(a.id, null);
+        }
       }
     }
   }
 
-  list(audience: Audience): LiveAircraft[] {
-    const all = [...this.aircraft.values()];
+  list(clubId: number, audience: Audience): LiveAircraft[] {
+    const all = [...this.channel(clubId).aircraft.values()];
     return audience === 'member' ? all : all.filter((a) => a.visibility === 'public');
   }
 
-  snapshotPayload(audience: Audience): string {
-    return JSON.stringify({ aircraft: this.list(audience) });
+  snapshotPayload(clubId: number, audience: Audience): string {
+    return JSON.stringify({ aircraft: this.list(clubId, audience) });
   }
 
-  private serializeDelta(ids: number[], audience: Audience): string {
+  private serializeDelta(ch: ClubChannel, ids: number[], audience: Audience): string {
     const changes = [];
     for (const id of ids) {
-      const a = this.aircraft.get(id);
+      const a = ch.aircraft.get(id);
       if (!a) continue;
       if (audience === 'restricted' && a.visibility !== 'public') continue;
       const { trail, ...rest } = a;
       changes.push({
         ...rest,
-        trailAppend: this.dirty.get(id) ?? null,
-        trailReset: this.trailResets.has(id),
+        trailAppend: ch.dirty.get(id) ?? null,
+        trailReset: ch.trailResets.has(id),
       });
     }
     return JSON.stringify({ aircraft: changes });
   }
 
   flush(): void {
-    if (this.dirty.size === 0) return;
-    const ids = [...this.dirty.keys()];
-    const ev: BufferedEvent = {
-      id: this.nextEventId++,
-      member: this.serializeDelta(ids, 'member'),
-      restricted: this.serializeDelta(ids, 'restricted'),
-    };
-    this.dirty.clear();
-    this.trailResets.clear();
-    this.ring.push(ev);
-    if (this.ring.length > 500) this.ring.splice(0, this.ring.length - 500);
-    for (const c of this.clients.values()) {
-      const payload = c.audience === 'member' ? ev.member : ev.restricted;
-      if (payload !== '{"aircraft":[]}') {
-        c.res.write(`event: delta\nid: ${ev.id}\ndata: ${payload}\n\n`);
+    for (const [clubId, ch] of this.channels) {
+      if (ch.dirty.size === 0) continue;
+      const ids = [...ch.dirty.keys()];
+      const ev: BufferedEvent = {
+        id: ch.nextEventId++,
+        member: this.serializeDelta(ch, ids, 'member'),
+        restricted: this.serializeDelta(ch, ids, 'restricted'),
+      };
+      ch.dirty.clear();
+      ch.trailResets.clear();
+      ch.ring.push(ev);
+      if (ch.ring.length > 500) ch.ring.splice(0, ch.ring.length - 500);
+      for (const c of this.clients.values()) {
+        if (c.clubId !== clubId) continue;
+        const payload = c.audience === 'member' ? ev.member : ev.restricted;
+        if (payload !== '{"aircraft":[]}') {
+          c.res.write(`event: delta\nid: ${ev.id}\ndata: ${payload}\n\n`);
+        }
       }
     }
   }
 
-  addClient(res: ServerResponse, audience: Audience, authenticated: boolean, lastEventId?: number): number {
+  addClient(
+    clubId: number,
+    res: ServerResponse,
+    audience: Audience,
+    authenticated: boolean,
+    lastEventId?: number
+  ): number {
+    const ch = this.channel(clubId);
     const id = this.nextClientId++;
-    this.clients.set(id, { id, res, audience, authenticated });
-    // Resume from the ring buffer when possible, otherwise send a snapshot.
+    this.clients.set(id, { id, res, clubId, audience, authenticated });
     const canResume =
       lastEventId !== undefined &&
-      this.ring.length > 0 &&
-      this.ring[0].id <= lastEventId + 1 &&
-      this.ring[this.ring.length - 1].id >= lastEventId;
+      ch.ring.length > 0 &&
+      ch.ring[0].id <= lastEventId + 1 &&
+      ch.ring[ch.ring.length - 1].id >= lastEventId;
     if (canResume) {
-      for (const ev of this.ring) {
+      for (const ev of ch.ring) {
         if (ev.id <= lastEventId!) continue;
         const payload = audience === 'member' ? ev.member : ev.restricted;
         res.write(`event: delta\nid: ${ev.id}\ndata: ${payload}\n\n`);
       }
     } else {
-      const lastId = this.ring.length ? this.ring[this.ring.length - 1].id : 0;
-      res.write(`event: snapshot\nid: ${lastId}\ndata: ${this.snapshotPayload(audience)}\n\n`);
+      const lastId = ch.ring.length ? ch.ring[ch.ring.length - 1].id : 0;
+      res.write(`event: snapshot\nid: ${lastId}\ndata: ${this.snapshotPayload(clubId, audience)}\n\n`);
     }
     return id;
   }
@@ -234,10 +268,10 @@ export class LiveBus {
     for (const c of this.clients.values()) c.res.write(': ping\n\n');
   }
 
-  // public_mode flipped off: anonymous viewers lose the stream immediately.
-  dropUnauthenticated(): void {
+  // A club flipped private: its anonymous viewers lose the stream immediately.
+  dropUnauthenticated(clubId: number): void {
     for (const c of [...this.clients.values()]) {
-      if (!c.authenticated) {
+      if (c.clubId === clubId && !c.authenticated) {
         try {
           c.res.end();
         } catch {
@@ -248,7 +282,8 @@ export class LiveBus {
     }
   }
 
-  clientCount(): number {
-    return this.clients.size;
+  clientCount(clubId?: number): number {
+    if (clubId === undefined) return this.clients.size;
+    return [...this.clients.values()].filter((c) => c.clubId === clubId).length;
   }
 }

@@ -33,6 +33,7 @@ export interface NormPosition {
 
 export interface AircraftRow {
   id: number;
+  club_id: number;
   hex: string;
   registration: string;
   callsign: string;
@@ -58,6 +59,7 @@ export interface AircraftRow {
 
 export interface AirfieldRow {
   id: number;
+  club_id: number;
   code: string;
   name: string;
   lat: number;

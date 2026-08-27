@@ -41,7 +41,7 @@ export function HistoryPage() {
       .catch(() => {});
   }, [filter, offset]);
 
-  if (!loading && me && !me.user && !me.publicMode) return <Navigate to="/login" replace />;
+  if (!loading && me && !me.user?.role && !me.user?.platformAdmin && !me.publicMode) return <Navigate to="/login" replace />;
 
   return (
     <div className="app-shell">

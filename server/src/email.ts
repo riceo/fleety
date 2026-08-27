@@ -1,0 +1,58 @@
+import { config } from './config.js';
+
+// Outbound mail via Resend's REST API. When RESEND_API_KEY is not set,
+// senders fall back to handing the admin a shareable link instead.
+export const emailConfigured = (): boolean => !!config.resendApiKey;
+
+async function send(to: string, subject: string, html: string): Promise<boolean> {
+  if (!emailConfigured()) return false;
+  try {
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${config.resendApiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ from: config.emailFrom, to: [to], subject, html }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+const shell = (title: string, body: string, cta: { href: string; label: string }) => `
+<div style="background:#060a14;padding:32px 16px;font-family:-apple-system,'Segoe UI',Roboto,sans-serif">
+  <div style="max-width:480px;margin:0 auto;background:#0d1424;border:1px solid #26314f;border-top:3px solid #e32636;padding:28px">
+    <p style="margin:0 0 4px;color:#7e8cab;font-size:11px;letter-spacing:3px;text-transform:uppercase">Fleety</p>
+    <h1 style="margin:0 0 16px;color:#eef2fb;font-size:22px">${title}</h1>
+    <div style="color:#aab6cf;font-size:15px;line-height:1.5">${body}</div>
+    <a href="${cta.href}" style="display:inline-block;margin-top:20px;background:#e32636;color:#ffffff;text-decoration:none;font-weight:600;padding:11px 22px;border-radius:3px">${cta.label}</a>
+    <p style="margin:20px 0 0;color:#56617c;font-size:12px">This link expires in 48 hours. If you weren't expecting it, ignore this email.</p>
+  </div>
+</div>`;
+
+export function sendInviteEmail(to: string, clubName: string, link: string): Promise<boolean> {
+  return send(
+    to,
+    `You've been added to ${clubName} on Fleety`,
+    shell(
+      `Welcome to ${clubName}`,
+      `<p>You've been given access to the ${clubName} operations board — live fleet tracking, flight history and the clubhouse ticker.</p><p>Set your password to get started.</p>`,
+      { href: link, label: 'Set your password' }
+    )
+  );
+}
+
+export function sendResetEmail(to: string, link: string): Promise<boolean> {
+  return send(
+    to,
+    'Reset your Fleety password',
+    shell(
+      'Password reset',
+      `<p>Someone (hopefully you) asked to reset the password for this account.</p>`,
+      { href: link, label: 'Choose a new password' }
+    )
+  );
+}

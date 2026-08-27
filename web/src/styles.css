@@ -3,6 +3,8 @@
    readouts, alert-red ticker. Club colours: Invicta red, white, deep blue. */
 
 :root {
+  /* --accent is set per club at runtime; everything red derives from it. */
+  --accent: #e32636;
   --bg: #060a14;
   --bg-2: #0a101f;
   --surface: #0d1424;
@@ -11,9 +13,9 @@
   --line-strong: rgba(139, 160, 210, 0.32);
   --ink: #eef2fb;
   --ink-dim: #7e8cab;
-  --red: #e32636;
-  --red-bright: #ff4553;
-  --red-soft: rgba(227, 38, 54, 0.12);
+  --red: var(--accent);
+  --red-bright: color-mix(in srgb, var(--accent), white 18%);
+  --red-soft: color-mix(in srgb, var(--accent) 12%, transparent);
   --blue: #5b6bc4;
   --green: #3af08c;
   --amber: #f5b942;
@@ -21,6 +23,56 @@
   --font-display: 'Barlow Condensed', 'Arial Narrow', sans-serif;
   --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace;
   --shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+}
+
+/* ---------- club theme presets (picked in Admin → Settings) ---------- */
+
+[data-theme='terminal'] {
+  --bg: #04080a;
+  --bg-2: #071009;
+  --surface: #0a140e;
+  --surface-2: #0f1d14;
+  --line: rgba(120, 220, 160, 0.14);
+  --line-strong: rgba(120, 220, 160, 0.3);
+  --ink: #d8f6e3;
+  --ink-dim: #6da089;
+  --font-ui: 'JetBrains Mono', ui-monospace, monospace;
+  --font-display: 'JetBrains Mono', ui-monospace, monospace;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+}
+[data-theme='terminal'] .strip-callsign,
+[data-theme='terminal'] .board-callsign,
+[data-theme='terminal'] h1,
+[data-theme='terminal'] h2,
+[data-theme='terminal'] .brand-name {
+  font-weight: 800;
+  letter-spacing: 0.01em;
+}
+
+[data-theme='heritage'] {
+  --bg: #120e09;
+  --bg-2: #17120c;
+  --surface: #1c1610;
+  --surface-2: #241d15;
+  --line: rgba(214, 186, 140, 0.16);
+  --line-strong: rgba(214, 186, 140, 0.32);
+  --ink: #f4ecdd;
+  --ink-dim: #a3947b;
+  --blue: #7a89c9;
+  --font-display: 'Zilla Slab', Georgia, serif;
+  --font-ui: 'Barlow', -apple-system, sans-serif;
+}
+
+[data-theme='daylight'] {
+  --bg: #f2f4f8;
+  --bg-2: #e9edf3;
+  --surface: #ffffff;
+  --surface-2: #eef1f6;
+  --line: #dde3ec;
+  --line-strong: #c4cedd;
+  --ink: #17233c;
+  --ink-dim: #5d6b84;
+  --shadow: 0 10px 30px rgba(23, 35, 60, 0.14);
 }
 
 * {
@@ -839,6 +891,18 @@ label.check {
 }
 .login-card .brand {
   justify-content: center;
+}
+.landing-card {
+  align-items: center;
+  gap: 1.4rem;
+  max-width: 440px;
+}
+.landing-card .brand-mark {
+  width: 46px;
+  height: 46px;
+}
+.landing-card .brand-name {
+  font-size: 1.9rem;
 }
 .login-card .brand-logo {
   height: 74px;

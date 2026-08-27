@@ -1,62 +1,97 @@
 import type { Database } from 'better-sqlite3';
+import { displayCallsignFor, type CallsignRule } from './clubs.js';
 
 // Flight annotations for the plane-spotting kiosk: a message pinned to an
 // aircraft either until a set time, or "for the next flight" — armed when the
 // aircraft takes off, cleared automatically when it lands. Take-offs and
-// landings also feed the ticker tape, and can be broadcast live so the board
-// snaps focus to the aircraft the moment something happens.
+// landings also feed the club's ticker tape, and are broadcast live so the
+// board snaps focus to the aircraft the moment something happens.
 
 export interface TickerEvent {
   ts: number;
   text: string;
   aircraftId: number | null;
+  clubId: number;
   visibility: 'public' | 'members';
 }
 
 export type TickerEmit = (ev: TickerEvent) => void;
 
-// "INV01" reads as "INVICTA 01" over the radio — and on the board.
-export function displayCallsign(cs: string): string {
-  const m = /^INV\s?(\d+)$/i.exec(cs.trim());
-  return m ? `INVICTA ${m[1]}` : cs.trim().toUpperCase();
-}
-
-// Notes currently worth showing: timed ones inside their window, and
-// next-flight ones that are queued (pending) or airborne (active).
-export function activeNotes(db: Database, now = Date.now()): Map<number, string> {
+// Notes currently worth showing, grouped per club (the poller pushes these
+// into each club's live channel every cycle).
+export function activeNotesByClub(db: Database, now = Date.now()): Map<number, Map<number, string>> {
   const rows = db
     .prepare(
-      `SELECT aircraft_id, text FROM annotations
-       WHERE (mode = 'until' AND until_ts > ? AND status != 'done')
-          OR (mode = 'next_flight' AND status IN ('pending', 'active'))
-       ORDER BY created_at DESC`
+      `SELECT an.aircraft_id, an.text, a.club_id FROM annotations an
+       JOIN aircraft a ON a.id = an.aircraft_id
+       WHERE (an.mode = 'until' AND an.until_ts > ? AND an.status != 'done')
+          OR (an.mode = 'next_flight' AND an.status IN ('pending', 'active'))
+       ORDER BY an.created_at DESC`
     )
-    .all(now) as { aircraft_id: number; text: string }[];
-  const map = new Map<number, string>();
+    .all(now) as { aircraft_id: number; text: string; club_id: number }[];
+  const byClub = new Map<number, Map<number, string>>();
   for (const r of rows) {
-    if (!map.has(r.aircraft_id)) map.set(r.aircraft_id, r.text);
+    const club = byClub.get(r.club_id) ?? new Map<number, string>();
+    if (!club.has(r.aircraft_id)) club.set(r.aircraft_id, r.text);
+    byClub.set(r.club_id, club);
   }
-  return map;
+  return byClub;
 }
 
-function aircraftInfo(db: Database, aircraftId: number) {
+export function activeNoteFor(db: Database, aircraftId: number, now = Date.now()): string | undefined {
+  const row = db
+    .prepare(
+      `SELECT text FROM annotations
+       WHERE aircraft_id = ?
+         AND ((mode = 'until' AND until_ts > ? AND status != 'done')
+           OR (mode = 'next_flight' AND status IN ('pending', 'active')))
+       ORDER BY created_at DESC LIMIT 1`
+    )
+    .get(aircraftId, now) as { text: string } | undefined;
+  return row?.text;
+}
+
+interface AircraftInfo {
+  registration: string;
+  callsign: string;
+  visibility: 'public' | 'members';
+  club_id: number;
+  callsign_rules: string;
+}
+
+function aircraftInfo(db: Database, aircraftId: number): AircraftInfo | undefined {
   return db
-    .prepare('SELECT registration, callsign, visibility FROM aircraft WHERE id = ?')
-    .get(aircraftId) as { registration: string; callsign: string; visibility: 'public' | 'members' } | undefined;
+    .prepare(
+      `SELECT a.registration, a.callsign, a.visibility, a.club_id, c.callsign_rules
+       FROM aircraft a JOIN clubs c ON c.id = a.club_id WHERE a.id = ?`
+    )
+    .get(aircraftId) as AircraftInfo | undefined;
 }
 
-function writeEvent(db: Database, aircraftId: number | null, text: string, emit?: TickerEmit): void {
+function parseRules(json: string): CallsignRule[] {
+  try {
+    const parsed = JSON.parse(json) as CallsignRule[];
+    return Array.isArray(parsed) ? parsed.filter((r) => r && r.prefix && r.spoken) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeEvent(db: Database, clubId: number, aircraftId: number | null, text: string, emit?: TickerEmit): void {
   const ts = Date.now();
-  db.prepare('INSERT INTO ticker_events (ts, aircraft_id, text) VALUES (?, ?, ?)').run(ts, aircraftId, text);
-  // Custom broadcasts (no aircraft) are for everyone; aircraft events follow
-  // the aircraft's visibility.
+  db.prepare('INSERT INTO ticker_events (ts, club_id, aircraft_id, text) VALUES (?, ?, ?, ?)').run(
+    ts,
+    clubId,
+    aircraftId,
+    text
+  );
   const ac = aircraftId !== null ? aircraftInfo(db, aircraftId) : null;
-  emit?.({ ts, text, aircraftId, visibility: aircraftId === null ? 'public' : (ac?.visibility ?? 'members') });
+  emit?.({ ts, text, aircraftId, clubId, visibility: aircraftId === null ? 'public' : (ac?.visibility ?? 'members') });
 }
 
-// Admin-typed message straight onto the tape ("BBQ AT THE CLUBHOUSE SATURDAY").
-export function postTickerMessage(db: Database, text: string, emit?: TickerEmit): void {
-  writeEvent(db, null, text.trim(), emit);
+// Admin-typed message straight onto the club's tape.
+export function postTickerMessage(db: Database, clubId: number, text: string, emit?: TickerEmit): void {
+  writeEvent(db, clubId, null, text.trim(), emit);
 }
 
 // Take-off: arm pending next-flight notes and write the departure ticker line,
@@ -68,15 +103,16 @@ export function onTakeoff(db: Database, flightId: number, aircraftId: number, em
   ).run(flightId, aircraftId);
 
   const ac = aircraftInfo(db, aircraftId);
-  const label = displayCallsign(ac?.callsign || ac?.registration || '?');
+  if (!ac) return;
+  const label = displayCallsignFor(ac.callsign || ac.registration, parseRules(ac.callsign_rules));
   const flight = db
     .prepare(
       `SELECT af.name AS origin_name FROM flights f LEFT JOIN airfields af ON af.id = f.origin_airfield_id WHERE f.id = ?`
     )
     .get(flightId) as { origin_name: string | null } | undefined;
-  const note = activeNotes(db).get(aircraftId);
+  const note = activeNoteFor(db, aircraftId);
   const from = flight?.origin_name ? ` ${flight.origin_name.toUpperCase()}` : '';
-  writeEvent(db, aircraftId, `${label} HAS DEPARTED${from}!${note ? ` — ${note.toUpperCase()}` : ''}`, emit);
+  writeEvent(db, ac.club_id, aircraftId, `${label} HAS DEPARTED${from}!${note ? ` — ${note.toUpperCase()}` : ''}`, emit);
 }
 
 export function onLanding(db: Database, flightId: number, aircraftId: number, emit?: TickerEmit): void {
@@ -87,10 +123,11 @@ export function onLanding(db: Database, flightId: number, aircraftId: number, em
     )
     .get(flightId) as { end_confidence: string | null; dest_name: string | null } | undefined;
   const ac = aircraftInfo(db, aircraftId);
-  const label = displayCallsign(ac?.callsign || ac?.registration || '?');
+  if (!ac) return;
+  const label = displayCallsignFor(ac.callsign || ac.registration, parseRules(ac.callsign_rules));
   if (flight?.end_confidence === 'confirmed' || flight?.end_confidence === 'assumed') {
     const at = flight.dest_name ? ` AT ${flight.dest_name.toUpperCase()}` : '';
-    writeEvent(db, aircraftId, `${label} HAS LANDED${at}`, emit);
+    writeEvent(db, ac.club_id, aircraftId, `${label} HAS LANDED${at}`, emit);
   }
   // The flight is over — retire its next-flight notes.
   db.prepare(
@@ -105,53 +142,64 @@ export interface TickerItem {
   aircraftId: number | null;
 }
 
-// The ticker feed: recent departures/landings, standing flight notes, and
-// per-aircraft taglines ("Our aerobatic display ship — where's he displaying
-// next?"). Members see everything; the open site and kiosk only see aircraft
-// whose visibility is public.
-export function tickerItems(db: Database, audience: 'member' | 'restricted', now = Date.now()): TickerItem[] {
+// One club's ticker feed: recent departures/landings (45-minute window so a
+// busy circuit day doesn't bury the tape), admin broadcasts (6 hours),
+// standing flight notes, and per-aircraft taglines. Members see everything;
+// the open site and kiosk only see public-visibility aircraft.
+export function tickerItems(
+  db: Database,
+  clubId: number,
+  audience: 'member' | 'restricted',
+  now = Date.now()
+): TickerItem[] {
   const visFilter = audience === 'member' ? '' : " AND a.visibility = 'public'";
-
   const eventVis = audience === 'member' ? '' : " AND (e.aircraft_id IS NULL OR a.visibility = 'public')";
-  // Departures/landings age off quickly (a busy circuit day would otherwise
-  // bury the tape); admin broadcasts run the full six hours.
+
   const events = db
     .prepare(
       `SELECT e.ts, e.text, e.aircraft_id AS aircraftId FROM ticker_events e
        LEFT JOIN aircraft a ON a.id = e.aircraft_id
-       WHERE ((e.aircraft_id IS NOT NULL AND e.ts > ?) OR (e.aircraft_id IS NULL AND e.ts > ?))${eventVis}
+       WHERE e.club_id = ?
+         AND ((e.aircraft_id IS NOT NULL AND e.ts > ?) OR (e.aircraft_id IS NULL AND e.ts > ?))${eventVis}
        ORDER BY e.ts DESC LIMIT 20`
     )
-    .all(now - 45 * 60_000, now - 6 * 3600 * 1000) as TickerItem[];
+    .all(clubId, now - 45 * 60_000, now - 6 * 3600 * 1000) as TickerItem[];
+
+  const club = db.prepare('SELECT callsign_rules FROM clubs WHERE id = ?').get(clubId) as
+    | { callsign_rules: string }
+    | undefined;
+  const rules = parseRules(club?.callsign_rules ?? '[]');
+  const spoken = (cs: string) => displayCallsignFor(cs, rules);
 
   const notes = db
     .prepare(
       `SELECT an.created_at AS ts, an.text, an.mode, a.id AS aircraftId, a.registration, a.callsign
        FROM annotations an JOIN aircraft a ON a.id = an.aircraft_id
-       WHERE ((an.mode = 'until' AND an.until_ts > ? AND an.status != 'done')
-          OR (an.mode = 'next_flight' AND an.status = 'pending'))${visFilter}
+       WHERE a.club_id = ?
+         AND ((an.mode = 'until' AND an.until_ts > ? AND an.status != 'done')
+           OR (an.mode = 'next_flight' AND an.status = 'pending'))${visFilter}
        ORDER BY an.created_at DESC LIMIT 10`
     )
-    .all(now) as { ts: number; text: string; mode: string; aircraftId: number; registration: string; callsign: string }[];
+    .all(clubId, now) as { ts: number; text: string; mode: string; aircraftId: number; registration: string; callsign: string }[];
 
   const noteItems: TickerItem[] = notes.map((n) => ({
     ts: n.ts,
     aircraftId: n.aircraftId,
-    text: `${displayCallsign(n.callsign || n.registration)}${n.mode === 'next_flight' ? ' NEXT FLIGHT' : ''} — ${n.text.toUpperCase()}`,
+    text: `${spoken(n.callsign || n.registration)}${n.mode === 'next_flight' ? ' NEXT FLIGHT' : ''} — ${n.text.toUpperCase()}`,
   }));
 
   const taglines = db
     .prepare(
       `SELECT a.id AS aircraftId, a.registration, a.callsign, a.tagline FROM aircraft a
-       WHERE a.deleted_at IS NULL AND a.enabled = 1 AND a.tagline != ''${visFilter}
+       WHERE a.club_id = ? AND a.deleted_at IS NULL AND a.enabled = 1 AND a.tagline != ''${visFilter}
        ORDER BY a.sort_order`
     )
-    .all() as { aircraftId: number; registration: string; callsign: string; tagline: string }[];
+    .all(clubId) as { aircraftId: number; registration: string; callsign: string; tagline: string }[];
 
   const taglineItems: TickerItem[] = taglines.map((t) => ({
     ts: 0,
     aircraftId: t.aircraftId,
-    text: `${displayCallsign(t.callsign || t.registration)} — ${t.tagline.toUpperCase()}`,
+    text: `${spoken(t.callsign || t.registration)} — ${t.tagline.toUpperCase()}`,
   }));
 
   const timed = [...noteItems, ...events].sort((a, b) => b.ts - a.ts).slice(0, 20);

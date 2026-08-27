@@ -45,7 +45,7 @@ export function AdminLayout() {
           <NavLink to="/admin" end>
             Aircraft
           </NavLink>
-          <NavLink to="/admin/users">Users</NavLink>
+          <NavLink to="/admin/members">Members</NavLink>
           <NavLink to="/admin/airfields">Airfields</NavLink>
           <NavLink to="/admin/messages">Messages</NavLink>
           <NavLink to="/admin/flights">Flights</NavLink>
@@ -402,59 +402,61 @@ export function AircraftAdmin() {
   );
 }
 
-// ---------- users ----------
+// ---------- members ----------
 
-interface AdminUser {
+interface Member {
   id: number;
   username: string;
+  email: string | null;
   role: 'member' | 'admin';
-  must_change_password: number;
   last_login_at: number | null;
 }
 
-export function UsersAdmin() {
-  const [data, reload] = useData<{ users: AdminUser[] }>('/api/admin/users');
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
+export function MembersAdmin() {
+  const [data, reload] = useData<{ members: Member[] }>('/api/admin/members');
+  const [email, setEmail] = useState('');
+  const [name, setName] = useState('');
   const [role, setRole] = useState('member');
   const [error, setError] = useState('');
+  const [shareLink, setShareLink] = useState('');
 
-  const add = async () => {
+  const invite = async () => {
     setError('');
+    setShareLink('');
     try {
-      await post('/api/admin/users', { username, password, role });
-      setUsername('');
-      setPassword('');
+      const res = await post<{ emailed: boolean; inviteLink: string | null }>('/api/admin/members', {
+        email,
+        name,
+        role,
+      });
+      if (res.inviteLink) setShareLink(res.inviteLink);
+      setEmail('');
+      setName('');
       reload();
     } catch (err) {
-      setError(`Could not create user: ${err instanceof Error ? err.message : err}`);
+      setError(`Could not invite: ${err instanceof Error ? err.message : err}`);
     }
   };
 
-  const resetPassword = async (u: AdminUser) => {
-    const pw = window.prompt(`New temporary password for ${u.username} (they must change it on sign-in):`);
-    if (!pw) return;
+  const resetPassword = async (m: Member) => {
+    const res = await post<{ emailed: boolean; resetLink: string | null }>(`/api/admin/members/${m.id}/reset`);
+    if (res.resetLink) setShareLink(res.resetLink);
+    else window.alert(`Reset link emailed to ${m.email}.`);
+  };
+
+  const setMemberRole = async (m: Member, newRole: string) => {
     try {
-      await put(`/api/admin/users/${u.id}`, { password: pw });
+      await put(`/api/admin/members/${m.id}`, { role: newRole });
       reload();
     } catch (err) {
       window.alert(`Failed: ${err instanceof Error ? err.message : err}`);
     }
   };
 
-  const setUserRole = async (u: AdminUser, newRole: string) => {
+  const remove = async (m: Member) => {
+    if (!window.confirm(`Remove ${m.email ?? m.username} from this club? Their account keeps any other clubs.`)) return;
     try {
-      await put(`/api/admin/users/${u.id}`, { role: newRole });
-      reload();
-    } catch (err) {
-      window.alert(`Failed: ${err instanceof Error ? err.message : err}`);
-    }
-  };
-
-  const remove = async (u: AdminUser) => {
-    if (!window.confirm(`Delete user ${u.username}?`)) return;
-    try {
-      await del(`/api/admin/users/${u.id}`);
+      await del(`/api/admin/members/${m.id}`);
       reload();
     } catch (err) {
       window.alert(`Failed: ${err instanceof Error ? err.message : err}`);
@@ -465,47 +467,57 @@ export function UsersAdmin() {
     <div>
       <h1>Members</h1>
       <div className="form-row inline-add">
-        <input placeholder="Username" value={username} onChange={(e) => setUsername(e.target.value)} />
-        <input placeholder="Temporary password" type="text" value={password} onChange={(e) => setPassword(e.target.value)} />
+        <input placeholder="email@example.com" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+        <input placeholder="Name (optional)" value={name} onChange={(e) => setName(e.target.value)} />
         <select value={role} onChange={(e) => setRole(e.target.value)}>
           <option value="member">Member</option>
           <option value="admin">Admin</option>
         </select>
-        <button className="btn btn-primary" onClick={() => void add()} disabled={!username || password.length < 8}>
-          Add member
+        <button className="btn btn-primary" onClick={() => void invite()} disabled={!email.includes('@')}>
+          Invite
         </button>
       </div>
-      <p className="muted small">New members must change their password on first sign-in.</p>
+      <p className="muted small">
+        Invited members get an email with a set-password link. If email isn't configured, the link appears here to
+        share by hand.
+      </p>
+      {shareLink && (
+        <p className="form-row">
+          <input readOnly value={shareLink} onFocus={(e) => e.target.select()} />
+          <button className="btn small" onClick={() => void navigator.clipboard.writeText(shareLink)}>
+            Copy link
+          </button>
+        </p>
+      )}
       {error && <p className="form-error">{error}</p>}
       <table className="table">
         <thead>
           <tr>
-            <th>Username</th>
+            <th>Member</th>
             <th>Role</th>
             <th>Last sign-in</th>
             <th></th>
           </tr>
         </thead>
         <tbody>
-          {data?.users.map((u) => (
-            <tr key={u.id}>
+          {data?.members.map((m) => (
+            <tr key={m.id}>
               <td>
-                <strong>{u.username}</strong>
-                {u.must_change_password === 1 && <span className="muted small"> (must change password)</span>}
+                <strong>{m.email ?? m.username}</strong>
               </td>
               <td>
-                <select value={u.role} onChange={(e) => void setUserRole(u, e.target.value)}>
+                <select value={m.role} onChange={(e) => void setMemberRole(m, e.target.value)}>
                   <option value="member">member</option>
                   <option value="admin">admin</option>
                 </select>
               </td>
-              <td className="muted">{u.last_login_at ? fmtAgo(u.last_login_at) : 'never'}</td>
+              <td className="muted">{m.last_login_at ? fmtAgo(m.last_login_at) : 'never'}</td>
               <td className="row-actions">
-                <button className="btn btn-ghost small" onClick={() => void resetPassword(u)}>
+                <button className="btn btn-ghost small" onClick={() => void resetPassword(m)}>
                   Reset password
                 </button>
-                <button className="btn btn-ghost small danger" onClick={() => void remove(u)}>
-                  Delete
+                <button className="btn btn-ghost small danger" onClick={() => void remove(m)}>
+                  Remove
                 </button>
               </td>
             </tr>
@@ -939,18 +951,47 @@ export function MessagesAdmin() {
 
 // ---------- settings ----------
 
+interface ClubSettings {
+  slug: string;
+  name: string;
+  subheading: string;
+  theme: string;
+  accent: string;
+  logo_path: string | null;
+  map_center: string;
+  map_zoom: number;
+  tile_style_url: string;
+  public_mode: number;
+  kiosk_token: string;
+  callsign_rules: string;
+}
+
+const THEME_OPTIONS = [
+  { key: 'ops', label: 'Ops board — condensed display + mono data (default)' },
+  { key: 'terminal', label: 'Terminal — all-mono, phosphor green' },
+  { key: 'heritage', label: 'Heritage — slab-serif, warm tones' },
+  { key: 'daylight', label: 'Daylight — the light version' },
+];
+
 export function SettingsAdmin() {
-  const [data, reload] = useData<{ settings: Record<string, string> }>('/api/admin/settings');
-  const [form, setForm] = useState<Record<string, string>>({});
+  const [data, reload] = useData<{ club: ClubSettings }>('/api/admin/settings');
+  const [form, setForm] = useState<Record<string, unknown>>({});
+  const [rules, setRules] = useState<{ prefix: string; spoken: string }[] | null>(null);
   const [saved, setSaved] = useState(false);
-  const s = { ...data?.settings, ...form };
+  const club = data?.club;
+  const val = <K extends keyof ClubSettings>(k: K, formKey: string): ClubSettings[K] | string =>
+    (form[formKey] as string | undefined) ?? club?.[k] ?? '';
+  const curRules: { prefix: string; spoken: string }[] =
+    rules ?? (club ? (JSON.parse(club.callsign_rules || '[]') as { prefix: string; spoken: string }[]) : []);
 
   const save = async () => {
-    await put('/api/admin/settings', form);
+    await put('/api/admin/settings', { ...form, ...(rules ? { callsignRules: rules } : {}) });
     setForm({});
+    setRules(null);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
     reload();
+    window.location.reload(); // theme/accent/name apply everywhere
   };
 
   const rotate = async () => {
@@ -959,19 +1000,19 @@ export function SettingsAdmin() {
     reload();
   };
 
-  const setKey = (k: string, v: string) => setForm((p) => ({ ...p, [k]: v }));
-  const publicOn = s.public_mode === '1';
-  const kioskUrl = data ? `${window.location.origin}/kiosk?token=${data.settings.kiosk_token}` : '';
+  const setKey = (k: string, v: unknown) => setForm((p) => ({ ...p, [k]: v }));
+  const publicOn = form.publicMode !== undefined ? !!form.publicMode : club?.public_mode === 1;
+  const kioskUrl = club ? `${window.location.origin}/kiosk?token=${club.kiosk_token}` : '';
 
   return (
     <div className="settings-page">
-      <h1>Settings</h1>
+      <h1>Club settings</h1>
 
       <section className="setting-block">
-        <h3>Site access</h3>
+        <h3>Access</h3>
         <label className="check big-check">
-          <input type="checkbox" checked={publicOn} onChange={(e) => setKey('public_mode', e.target.checked ? '1' : '0')} />
-          Open to the world (no sign-in needed to view the map)
+          <input type="checkbox" checked={publicOn} onChange={(e) => setKey('publicMode', e.target.checked)} />
+          Open to the world (no sign-in needed to view the board)
         </label>
         <p className="muted small">
           When off, only members and the kiosk screen can see the tracker. Turning it off also disconnects any
@@ -981,7 +1022,7 @@ export function SettingsAdmin() {
 
       <section className="setting-block">
         <h3>Kiosk / big screen</h3>
-        <p className="muted small">Open this link on the coffee-shop TV — it signs itself in with a view-only token:</p>
+        <p className="muted small">Open this link on the clubhouse TV — it signs itself in with a view-only token:</p>
         <div className="form-row">
           <input readOnly value={kioskUrl} onFocus={(e) => e.target.select()} />
           <button className="btn small" onClick={() => void navigator.clipboard.writeText(kioskUrl)}>
@@ -994,21 +1035,45 @@ export function SettingsAdmin() {
       </section>
 
       <section className="setting-block">
-        <h3>Branding & map</h3>
+        <h3>Branding</h3>
         <div className="form-row">
           <label>
-            Site name
-            <input value={s.site_name ?? ''} onChange={(e) => setKey('site_name', e.target.value)} />
+            Board name
+            <input value={String(val('name', 'name'))} onChange={(e) => setKey('name', e.target.value)} />
+          </label>
+          <label>
+            Subheading
+            <input value={String(val('subheading', 'subheading'))} onChange={(e) => setKey('subheading', e.target.value)} />
+          </label>
+        </div>
+        <div className="form-row">
+          <label style={{ flex: 2 }}>
+            Theme
+            <select value={String(val('theme', 'theme'))} onChange={(e) => setKey('theme', e.target.value)}>
+              {THEME_OPTIONS.map((t) => (
+                <option key={t.key} value={t.key}>
+                  {t.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Accent colour
+            <input
+              type="color"
+              value={String(val('accent', 'accent')) || '#e32636'}
+              onChange={(e) => setKey('accent', e.target.value)}
+            />
           </label>
         </div>
         <div className="upload-row">
-          {data?.settings.logo_path ? (
-            <img className="logo-preview" src={`/uploads/${data.settings.logo_path}`} alt="Club logo" />
+          {club?.logo_path ? (
+            <img className="logo-preview" src={`/uploads/${club.logo_path}`} alt="Club logo" />
           ) : (
-            <span className="muted small">No club logo uploaded yet — the fallback mark is shown.</span>
+            <span className="muted small">No club logo uploaded yet — the neutral mark is shown.</span>
           )}
           <label className="btn small">
-            {data?.settings.logo_path ? 'Replace logo' : 'Upload club logo'}
+            {club?.logo_path ? 'Replace logo' : 'Upload club logo'}
             <input
               type="file"
               accept="image/png,image/jpeg,image/webp"
@@ -1018,64 +1083,84 @@ export function SettingsAdmin() {
                 if (!file) return;
                 const fd = new FormData();
                 fd.append('file', file);
-                void api('/api/admin/branding/logo', { method: 'POST', body: fd }).then(reload);
+                void api('/api/admin/branding/logo', { method: 'POST', body: fd }).then(() => window.location.reload());
               }}
             />
           </label>
-          {data?.settings.logo_path && (
-            <button className="btn btn-ghost small" onClick={() => void del('/api/admin/branding/logo').then(reload)}>
+          {club?.logo_path && (
+            <button
+              className="btn btn-ghost small"
+              onClick={() => void del('/api/admin/branding/logo').then(() => window.location.reload())}
+            >
               Remove logo
             </button>
           )}
         </div>
+      </section>
+
+      <section className="setting-block">
+        <h3>Callsigns</h3>
+        <p className="muted small">
+          How transmitted callsigns read on the board and ticker — e.g. prefix INV, spoken INVICTA turns “INV01”
+          into “INVICTA 01”.
+        </p>
+        {curRules.map((r, i) => (
+          <div className="form-row" key={i}>
+            <label>
+              Prefix
+              <input
+                value={r.prefix}
+                onChange={(e) =>
+                  setRules(curRules.map((x, j) => (j === i ? { ...x, prefix: e.target.value.toUpperCase() } : x)))
+                }
+                style={{ width: '7rem' }}
+              />
+            </label>
+            <label>
+              Spoken as
+              <input
+                value={r.spoken}
+                onChange={(e) =>
+                  setRules(curRules.map((x, j) => (j === i ? { ...x, spoken: e.target.value.toUpperCase() } : x)))
+                }
+              />
+            </label>
+            <button className="btn btn-ghost small danger" onClick={() => setRules(curRules.filter((_, j) => j !== i))}>
+              Remove
+            </button>
+          </div>
+        ))}
+        <button className="btn small" onClick={() => setRules([...curRules, { prefix: '', spoken: '' }])}>
+          Add rule
+        </button>
+      </section>
+
+      <section className="setting-block">
+        <h3>Map</h3>
         <div className="form-row">
           <label>
             Map style URL
-            <input value={s.tile_style_url ?? ''} onChange={(e) => setKey('tile_style_url', e.target.value)} />
+            <input value={String(val('tile_style_url', 'tileStyleUrl'))} onChange={(e) => setKey('tileStyleUrl', e.target.value)} />
           </label>
         </div>
         <div className="form-row">
           <label>
             Map centre (lat,lon)
-            <input value={s.map_center ?? ''} onChange={(e) => setKey('map_center', e.target.value)} />
+            <input value={String(val('map_center', 'mapCenter'))} onChange={(e) => setKey('mapCenter', e.target.value)} />
           </label>
           <label>
             Zoom
-            <input value={s.map_zoom ?? ''} onChange={(e) => setKey('map_zoom', e.target.value)} style={{ width: '5rem' }} />
+            <input value={String(val('map_zoom', 'mapZoom'))} onChange={(e) => setKey('mapZoom', e.target.value)} style={{ width: '5rem' }} />
           </label>
         </div>
-      </section>
-
-      <section className="setting-block">
-        <h3>Data collection</h3>
-        <div className="form-row">
-          <label>
-            Poll interval, aircraft active (ms)
-            <input value={s.poll_fast_ms ?? ''} onChange={(e) => setKey('poll_fast_ms', e.target.value)} />
-          </label>
-          <label>
-            Poll interval, idle (ms)
-            <input value={s.poll_slow_ms ?? ''} onChange={(e) => setKey('poll_slow_ms', e.target.value)} />
-          </label>
-        </div>
-        <div className="form-row">
-          <label>
-            Keep raw ADS-B JSON (days)
-            <input value={s.raw_retention_days ?? ''} onChange={(e) => setKey('raw_retention_days', e.target.value)} />
-          </label>
-          <label>
-            Watchdog ping URL (healthchecks.io)
-            <input value={s.deadman_url ?? ''} onChange={(e) => setKey('deadman_url', e.target.value)} placeholder="(optional)" />
-          </label>
-        </div>
-        <p className="muted small">
-          Positions themselves are kept forever — only the verbose raw JSON is pruned. The watchdog URL is pinged
-          while polling is healthy, so a dead tracker raises an alert.
-        </p>
       </section>
 
       <div className="form-actions">
-        <button className="btn btn-primary" onClick={() => void save()} disabled={Object.keys(form).length === 0}>
+        <button
+          className="btn btn-primary"
+          onClick={() => void save()}
+          disabled={Object.keys(form).length === 0 && rules === null}
+        >
           Save settings
         </button>
         {saved && <span className="saved-note">Saved ✓</span>}

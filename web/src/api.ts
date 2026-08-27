@@ -47,17 +47,34 @@ export interface LiveDelta extends Omit<LiveAircraft, 'trail'> {
   trailReset: boolean;
 }
 
+export interface CallsignRule {
+  prefix: string;
+  spoken: string;
+}
+
 export interface AppConfig {
+  platform: boolean; // true = apex/unknown host: show the Fleety landing
+  clubSlug?: string;
   siteName: string;
-  tileStyleUrl: string;
-  mapCenter: string;
-  mapZoom: number;
-  publicMode: boolean;
-  logoUrl: string | null;
+  subheading?: string;
+  theme?: string;
+  accent?: string;
+  tileStyleUrl?: string;
+  mapCenter?: string;
+  mapZoom?: number;
+  publicMode?: boolean;
+  logoUrl?: string | null;
+  callsignRules?: CallsignRule[];
 }
 
 export interface Me {
-  user: { username: string; role: 'member' | 'admin'; mustChangePassword: boolean } | null;
+  user: {
+    username: string;
+    email: string | null;
+    platformAdmin: boolean;
+    role: 'member' | 'admin' | null;
+    mustChangePassword: boolean;
+  } | null;
   kiosk: boolean;
   publicMode: boolean;
 }

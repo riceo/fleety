@@ -4,10 +4,15 @@ import type { Settings } from '../settings.js';
 import type { LiveBus } from '../live/liveBus.js';
 import type { AircraftRow, NormPosition } from '../types.js';
 import { FlightDetector } from './flightDetector.js';
-import { activeNotes } from '../annotations.js';
+import { activeNotesByClub } from '../annotations.js';
 
 const MAX_BACKOFF_MS = 5 * 60_000;
+const HEXES_PER_CALL = 100;
 
+// ONE poller for the whole platform: every tracked hex across every club is
+// batched into shared upstream calls, so API load stays near-constant no
+// matter how many clubs join. Results fan out to each club that tracks the
+// aircraft (two clubs watching the same airframe share the same fix).
 export class Poller {
   private lastTsByAircraft = new Map<number, number>();
   private consecutiveErrors = 0;
@@ -52,14 +57,12 @@ export class Poller {
       )
       .run(Date.now());
     return this.db
-      .prepare('SELECT * FROM aircraft WHERE deleted_at IS NULL ORDER BY sort_order, id')
+      .prepare('SELECT * FROM aircraft WHERE deleted_at IS NULL ORDER BY club_id, sort_order, id')
       .all() as AircraftRow[];
   }
 
   private logPoll(ok: boolean, status: number | null, error: string | null, count: number, durationMs: number): void {
     const now = Date.now();
-    // Errors always logged; healthy polls at most once a minute to keep the
-    // table small while still proving the poller was alive.
     if (ok && now - this.lastOkLogAt < 60_000) return;
     if (ok) this.lastOkLogAt = now;
     this.db
@@ -122,23 +125,42 @@ export class Poller {
     let anyActive = false;
     try {
       const aircraft = this.trackedAircraft();
-      this.live.syncAircraftList(aircraft);
-      const enabled = aircraft.filter((a) => a.enabled === 1);
-      const byHex = new Map(enabled.map((a) => [a.hex.toLowerCase(), a]));
 
-      if (enabled.length > 0) {
-        const positions = await this.provider.fetchPositions([...byHex.keys()]);
+      // Refresh each club's live roster.
+      const byClub = new Map<number, AircraftRow[]>();
+      for (const a of aircraft) {
+        const list = byClub.get(a.club_id) ?? [];
+        list.push(a);
+        byClub.set(a.club_id, list);
+      }
+      for (const [clubId, rows] of byClub) this.live.syncAircraftList(clubId, rows);
+
+      const enabled = aircraft.filter((a) => a.enabled === 1);
+      const byHex = new Map<string, AircraftRow[]>();
+      for (const a of enabled) {
+        const key = a.hex.toLowerCase();
+        const list = byHex.get(key) ?? [];
+        list.push(a);
+        byHex.set(key, list);
+      }
+
+      if (byHex.size > 0) {
+        const hexes = [...byHex.keys()];
+        const positions: NormPosition[] = [];
+        for (let i = 0; i < hexes.length; i += HEXES_PER_CALL) {
+          positions.push(...(await this.provider.fetchPositions(hexes.slice(i, i + HEXES_PER_CALL))));
+        }
         const apply = this.db.transaction(() => {
           for (const p of positions) {
-            const ac = byHex.get(p.hex);
-            if (!ac) continue;
-            const lastTs = this.lastTsByAircraft.get(ac.id) ?? 0;
-            if (p.ts <= lastTs) continue; // stale fix repeated by the aggregator
-            const flightId = this.detector.onPosition(ac.id, p);
-            this.insertPosition(ac.id, p, flightId);
-            this.lastTsByAircraft.set(ac.id, p.ts);
-            this.live.update(ac.id, p, flightId);
-            if (flightId !== null && p.ts > Date.now() - 120_000) anyActive = true;
+            for (const ac of byHex.get(p.hex) ?? []) {
+              const lastTs = this.lastTsByAircraft.get(ac.id) ?? 0;
+              if (p.ts <= lastTs) continue; // stale fix repeated by the aggregator
+              const flightId = this.detector.onPosition({ id: ac.id, club_id: ac.club_id }, p);
+              this.insertPosition(ac.id, p, flightId);
+              this.lastTsByAircraft.set(ac.id, p.ts);
+              this.live.update(ac.club_id, ac.id, p, flightId);
+              if (flightId !== null && p.ts > Date.now() - 120_000) anyActive = true;
+            }
           }
           this.detector.tick(Date.now());
         });
@@ -162,7 +184,9 @@ export class Poller {
     }
     this.lastPollAt = Date.now();
 
-    this.live.setNotes(activeNotes(this.db));
+    for (const [clubId, notes] of activeNotesByClub(this.db)) {
+      this.live.setNotes(clubId, notes);
+    }
     this.live.refreshStatuses();
     this.live.flush();
 

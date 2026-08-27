@@ -1329,7 +1329,6 @@ interface StatusRes {
   counts: { positions: number; flights: number; aircraft: number; users: number };
   dbSizeBytes: number;
   sseClients: number;
-  rescue?: { configured: boolean; month: string | null; used: number; budget: number };
 }
 
 export function StatusAdmin() {
@@ -1368,15 +1367,6 @@ export function StatusAdmin() {
           <label>Live viewers</label>
           <strong>{data.sseClients}</strong>
         </div>
-        {data.rescue?.configured && (
-          <div className={`stat-tile ${data.rescue.used >= data.rescue.budget ? 'bad' : 'ok'}`}>
-            <label>ADSBx rescue budget</label>
-            <strong>
-              {data.rescue.used.toLocaleString()} / {data.rescue.budget.toLocaleString()}
-            </strong>
-            <span className="muted small">requests this month{data.rescue.month ? ` (${data.rescue.month})` : ''}</span>
-          </div>
-        )}
       </div>
       <h3>Recent polls</h3>
       <table className="table">

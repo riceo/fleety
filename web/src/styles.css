@@ -1514,7 +1514,6 @@ label.check {
 .target-panel.sparkle {
   border-left-color: #ff8ad8;
   animation: sparkle-border 3.5s ease-in-out infinite;
-  position: relative;
 }
 .strip.sparkle .strip-callsign,
 .board-card.sparkle .board-callsign,

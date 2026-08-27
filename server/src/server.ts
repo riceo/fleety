@@ -295,7 +295,6 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
       publicMode: club.public_mode === 1,
       logoUrl: club.logo_path ? `/uploads/${club.logo_path}` : null,
       callsignRules: clubs.rules(club),
-      rescue: !!config.adsbxApiKey,
     };
   });
 
@@ -560,30 +559,6 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
       return { error: 'invalid_image' };
     }
   };
-
-  // Manual ADSBx probe — bootstraps rescue coverage for a flight that began
-  // inside a free-network blackspot. Spends real budget: admin-only, rate
-  // limited against double-clicks, and audited.
-  app.post(
-    '/api/admin/aircraft/:id/rescue-probe',
-    { config: { rateLimit: { max: 6, timeWindow: '1 minute' } } },
-    async (req, reply) => {
-      const club = clubOf(req, reply);
-      if (!club || !requireClubAdmin(req, reply, club)) return;
-      const ac = clubAircraft(club, Number((req.params as { id: string }).id)) as
-        | { id: number; registration: string }
-        | undefined;
-      if (!ac) return reply.code(404).send({ error: 'not_found' });
-      const res = await poller.manualRescue(ac.id);
-      if (!res.ok) {
-        const code =
-          res.error === 'budget_exhausted' ? 429 : res.error === 'provider_error' ? 502 : 400;
-        return reply.code(code).send({ error: res.error });
-      }
-      audit(req, 'aircraft.rescue_probe', `${ac.registration}: ${res.found ? 'contact' : 'no contact'}`);
-      return res;
-    }
-  );
 
   app.post('/api/admin/aircraft/:id/image', async (req, reply) => {
     const club = clubOf(req, reply);
@@ -1081,20 +1056,8 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
       ).c,
       members: (db.prepare('SELECT COUNT(*) c FROM memberships WHERE club_id = ?').get(club.id) as { c: number }).c,
     };
-    let rescueUsage: { month?: string; used?: number } = {};
-    try {
-      rescueUsage = JSON.parse(settings.get('adsbx_usage', '{}'));
-    } catch {
-      /* unparsed */
-    }
     return {
       poller: { lastPollAt: poller.lastPollAt, ok: poller.lastPollOk, error: poller.lastPollError },
-      rescue: {
-        configured: !!config.adsbxApiKey,
-        month: rescueUsage.month ?? null,
-        used: rescueUsage.used ?? 0,
-        budget: config.adsbxMonthlyBudget,
-      },
       recentPolls: db.prepare('SELECT * FROM poll_log ORDER BY ts DESC LIMIT 30').all(),
       counts,
       dbSizeBytes: dbFileSizeBytes(),
@@ -1187,6 +1150,54 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     audit(req, 'platform.admin_flag', `${id} -> ${platformAdmin}`);
     return { ok: true };
   });
+
+  // The ADSBx rescue tier is platform infrastructure billed to the platform,
+  // so its status and the manual probe live here — never in club admin.
+  app.get('/api/platform/rescue', async (req, reply) => {
+    if (!requirePlatform(req, reply)) return;
+    let usage: { month?: string; used?: number } = {};
+    try {
+      usage = JSON.parse(settings.get('adsbx_usage', '{}'));
+    } catch {
+      /* unparsed */
+    }
+    const aircraft = db
+      .prepare(
+        `SELECT a.id, a.registration, a.callsign, a.hex, c.name club
+         FROM aircraft a JOIN clubs c ON c.id = a.club_id
+         WHERE a.deleted_at IS NULL AND a.enabled = 1
+         ORDER BY c.name, a.registration`
+      )
+      .all();
+    return {
+      configured: !!config.adsbxApiKey,
+      month: usage.month ?? null,
+      used: usage.used ?? 0,
+      budget: config.adsbxMonthlyBudget,
+      aircraft,
+    };
+  });
+
+  // Manual ADSBx probe — bootstraps rescue coverage for a flight that began
+  // inside a free-network blackspot (the automatic tier needs an open flight).
+  // Spends real budget: rate limited against double-clicks, and audited.
+  app.post(
+    '/api/platform/rescue-probe',
+    { config: { rateLimit: { max: 6, timeWindow: '1 minute' } } },
+    async (req, reply) => {
+      if (!requirePlatform(req, reply)) return;
+      const aircraftId = Number((req.body as { aircraftId?: number } | null)?.aircraftId);
+      if (!Number.isInteger(aircraftId)) return reply.code(400).send({ error: 'missing_aircraft' });
+      const res = await poller.manualRescue(aircraftId);
+      if (!res.ok) {
+        const code =
+          res.error === 'budget_exhausted' ? 429 : res.error === 'provider_error' ? 502 : 400;
+        return reply.code(code).send({ error: res.error });
+      }
+      audit(req, 'platform.rescue_probe', `${aircraftId}: ${res.found ? 'contact' : 'no contact'}`);
+      return res;
+    }
+  );
 
   // ---------- SPA shell with social/SEO meta ----------
 

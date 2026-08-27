@@ -181,7 +181,96 @@ export function PlatformPage() {
             ))}
           </tbody>
         </table>
+
+        <RescuePanel />
       </main>
     </div>
+  );
+}
+
+// ---------- ADSBx rescue (platform infrastructure, platform bill) ----------
+
+interface RescueInfo {
+  configured: boolean;
+  month: string | null;
+  used: number;
+  budget: number;
+  aircraft: { id: number; registration: string; callsign: string; hex: string; club: string }[];
+}
+
+function RescuePanel() {
+  const [info, setInfo] = useState<RescueInfo | null>(null);
+  const [acId, setAcId] = useState('');
+  const [probe, setProbe] = useState<'idle' | 'busy' | string>('idle');
+
+  const load = useCallback(() => {
+    api<RescueInfo>('/api/platform/rescue')
+      .then(setInfo)
+      .catch(() => {});
+  }, []);
+  useEffect(load, [load]);
+
+  // One paid ADSBexchange request. Bootstraps rescue coverage when a flight
+  // begins inside a free-network blackspot: a hit opens the flight, and the
+  // automatic tier keeps probing from there.
+  const check = async () => {
+    setProbe('busy');
+    try {
+      const r = await post<{ found: boolean; posAgeSec: number | null }>('/api/platform/rescue-probe', {
+        aircraftId: Number(acId),
+      });
+      setProbe(
+        r.found
+          ? `Contact${r.posAgeSec != null ? ` — position ${r.posAgeSec}s old` : ''} ✓`
+          : 'No ADSBx contact'
+      );
+      load();
+    } catch (err) {
+      setProbe(
+        err instanceof Error && err.message === 'budget_exhausted'
+          ? 'Budget exhausted'
+          : 'Check failed'
+      );
+    }
+    setTimeout(() => setProbe('idle'), 6000);
+  };
+
+  if (!info) return null;
+  return (
+    <>
+      <h1 style={{ marginTop: '2rem' }}>Platform — ADSBx rescue</h1>
+      {!info.configured ? (
+        <p className="muted small">
+          Not configured. Set <code>ADSBX_API_KEY</code> (RapidAPI) to enable the paid rescue tier —
+          automatic probing of aircraft that vanish mid-flight from the free networks, plus this manual check.
+        </p>
+      ) : (
+        <>
+          <p className="muted small">
+            Each check is one paid ADSBexchange request against the platform budget — used{' '}
+            <strong>
+              {info.used.toLocaleString()} / {info.budget.toLocaleString()}
+            </strong>{' '}
+            this month{info.month ? ` (${info.month})` : ''}. Use it when an aircraft took off inside a
+            free-network blackspot: a hit opens its flight and the automatic rescue tier takes over.
+          </p>
+          <div className="form-row inline-add">
+            <select value={acId} onChange={(e) => setAcId(e.target.value)} style={{ minWidth: '18rem' }}>
+              <option value="">Select aircraft…</option>
+              {info.aircraft.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.club} — {a.registration}
+                  {a.callsign ? ` (${a.callsign})` : ''}
+                </option>
+              ))}
+            </select>
+            <button className="btn btn-primary" onClick={() => void check()} disabled={!acId || probe === 'busy'}>
+              {probe === 'busy' ? 'Checking…' : 'Check ADSBx'}
+            </button>
+            {probe !== 'idle' && probe !== 'busy' && <span className="mono-label">{probe}</span>}
+          </div>
+        </>
+      )}
+    </>
   );
 }

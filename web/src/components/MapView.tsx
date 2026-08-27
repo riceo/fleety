@@ -3,6 +3,7 @@ import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { api, type AppConfig, type LiveAircraft } from '../api';
 import { renderIcon, renderRoundel } from '../icons';
+import { isSparkly } from '../sparkle';
 
 const CLUB_BLUE = '#5b6bc4';
 
@@ -199,18 +200,77 @@ export const MapView = forwardRef<MapViewHandle, Props>(function MapView(
 
     map.on('load', () => {
       addAirfieldLayers(map, config.accent ?? '#e32636');
-      map.addSource('trails', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+      map.addSource('trails', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+        lineMetrics: true, // enables the sparkle gradient
+      });
       map.addSource('aircraft', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
       map.addLayer({
         id: 'trails',
         type: 'line',
         source: 'trails',
+        filter: ['!=', ['get', 'sparkle'], true],
         paint: {
           'line-color': ['get', 'color'],
           'line-width': 2.5,
           'line-opacity': 0.75,
         },
         layout: { 'line-cap': 'round', 'line-join': 'round' },
+      });
+      // ✨ The Honor trail: a shimmer gradient with little stars strung along it.
+      map.addLayer({
+        id: 'trails-sparkle',
+        type: 'line',
+        source: 'trails',
+        filter: ['==', ['get', 'sparkle'], true],
+        paint: {
+          'line-width': 3.2,
+          'line-opacity': 0.95,
+          'line-gradient': [
+            'interpolate',
+            ['linear'],
+            ['line-progress'],
+            0, '#7dd8ff',
+            0.35, '#c792ff',
+            0.7, '#ff8ad8',
+            1, '#ffd166',
+          ],
+        },
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+      });
+      map.addLayer({
+        id: 'trails-sparkle-stars',
+        type: 'symbol',
+        source: 'trails',
+        filter: ['==', ['get', 'sparkle'], true],
+        layout: {
+          'symbol-placement': 'line',
+          'symbol-spacing': 55,
+          'text-field': '✦',
+          'text-size': 11,
+          'text-allow-overlap': true,
+          'text-keep-upright': false,
+          'text-font': ['Noto Sans Regular'],
+        },
+        paint: {
+          'text-color': '#ffd6f2',
+          'text-halo-color': 'rgba(255, 138, 216, 0.6)',
+          'text-halo-width': 1.2,
+        },
+      });
+      // Soft glow under a sparkly aircraft's icon.
+      map.addLayer({
+        id: 'aircraft-sparkle-glow',
+        type: 'circle',
+        source: 'aircraft',
+        filter: ['==', ['get', 'sparkle'], true],
+        paint: {
+          'circle-radius': 20,
+          'circle-color': '#ff8ad8',
+          'circle-blur': 1,
+          'circle-opacity': 0.45,
+        },
       });
       map.addLayer({
         id: 'aircraft-icons',
@@ -284,24 +344,29 @@ export const MapView = forwardRef<MapViewHandle, Props>(function MapView(
 
     const points = current
       .filter((a) => a.pos && now - a.pos.ts < MAP_MAX_AGE_MS)
-      .map((a) => ({
-        type: 'Feature' as const,
-        geometry: { type: 'Point' as const, coordinates: [a.pos!.lon, a.pos!.lat] },
-        properties: {
-          id: a.id,
-          iconKey: `ac-${a.id}`,
-          rotation: a.pos!.track ?? 0,
-          label: a.status === 'airborne' ? (a.liveCallsign ?? a.registration) : a.registration,
-          selected: a.id === selectedId,
-          ghost: a.status !== 'airborne',
-        },
-      }));
+      .map((a) => {
+        const sparkle = isSparkly(a);
+        const label = a.status === 'airborne' ? (a.liveCallsign ?? a.registration) : a.registration;
+        return {
+          type: 'Feature' as const,
+          geometry: { type: 'Point' as const, coordinates: [a.pos!.lon, a.pos!.lat] },
+          properties: {
+            id: a.id,
+            iconKey: `ac-${a.id}`,
+            rotation: a.pos!.track ?? 0,
+            label: sparkle ? `✨ ${label} ✨` : label,
+            selected: a.id === selectedId,
+            ghost: a.status !== 'airborne',
+            sparkle,
+          },
+        };
+      });
     const trails = current
       .filter((a) => a.trail.length > 1 && a.status === 'airborne')
       .map((a) => ({
         type: 'Feature' as const,
         geometry: { type: 'LineString' as const, coordinates: a.trail },
-        properties: { color: a.color },
+        properties: { color: a.color, sparkle: isSparkly(a) },
       }));
     (map.getSource('aircraft') as maplibregl.GeoJSONSource | undefined)?.setData({
       type: 'FeatureCollection',

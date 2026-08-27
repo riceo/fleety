@@ -81,6 +81,24 @@ export class LiveBus {
         pos: null,
         trail: [],
       };
+      const iconUrl = row.icon_path ? `/uploads/${row.icon_path}` : null;
+      const photoUrl = row.photo_path ? `/uploads/${row.photo_path}` : null;
+      // Admin edits (colour, icon, tagline…) must reach connected boards
+      // immediately, not on their next reconnect.
+      const changed =
+        existing &&
+        (existing.color !== row.color ||
+          existing.icon !== row.icon ||
+          existing.iconUrl !== iconUrl ||
+          existing.photoUrl !== photoUrl ||
+          existing.callsign !== row.callsign ||
+          existing.registration !== row.registration ||
+          existing.nickname !== row.nickname ||
+          existing.tagline !== row.tagline ||
+          existing.description !== row.description ||
+          existing.typeName !== row.type_name ||
+          existing.visibility !== row.visibility ||
+          existing.category !== row.category);
       base.hex = row.hex;
       base.registration = row.registration;
       base.callsign = row.callsign;
@@ -91,10 +109,11 @@ export class LiveBus {
       base.category = row.category;
       base.visibility = row.visibility;
       base.icon = row.icon;
-      base.iconUrl = row.icon_path ? `/uploads/${row.icon_path}` : null;
-      base.photoUrl = row.photo_path ? `/uploads/${row.photo_path}` : null;
+      base.iconUrl = iconUrl;
+      base.photoUrl = photoUrl;
       base.color = row.color;
       if (!existing) ch.aircraft.set(row.id, base);
+      if (changed && !ch.dirty.has(row.id)) ch.dirty.set(row.id, null);
     }
     for (const id of [...ch.aircraft.keys()]) {
       if (!seen.has(id)) {

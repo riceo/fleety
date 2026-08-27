@@ -1,5 +1,6 @@
 import type { LiveAircraft } from '../api';
 import { displayCallsign, fmtAgo, fmtAlt, fmtGs } from '../format';
+import { isSparkly } from '../sparkle';
 
 export function StatusBadge({ status }: { status: LiveAircraft['status'] }) {
   const label = status === 'airborne' ? 'Airborne' : status === 'ground' ? 'On stand' : 'No signal';
@@ -25,7 +26,7 @@ export function FlightStrip({
   const airborne = a.status === 'airborne';
   return (
     <button
-      className={`strip${airborne ? ' strip-air' : ''}${selected ? ' selected' : ''}`}
+      className={`strip${airborne ? ' strip-air' : ''}${selected ? ' selected' : ''}${isSparkly(a) ? ' sparkle' : ''}`}
       style={{ ['--strip-color' as string]: a.color }}
       onClick={onClick}
       aria-label={`${a.registration} ${a.nickname || a.typeName}, ${a.status}`}

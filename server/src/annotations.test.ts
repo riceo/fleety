@@ -64,10 +64,29 @@ describe('kiosk annotations', () => {
     db.prepare("UPDATE aircraft SET visibility = 'members', tagline = 'Aerobatic ship — where next?' WHERE id = ?").run(
       aircraftId
     );
+    // Taglines require the aircraft to have actually been seen.
+    db.prepare('INSERT INTO positions (aircraft_id, ts, lat, lon) VALUES (?, ?, 51.35, 0.5)').run(
+      aircraftId,
+      Date.now()
+    );
     onTakeoff(db, flightId, aircraftId);
     expect(tickerItems(db, clubId, 'member').some((t) => t.text.includes('HAS DEPARTED'))).toBe(true);
     expect(tickerItems(db, clubId, 'restricted')).toHaveLength(0);
     expect(tickerItems(db, clubId, 'member').some((t) => t.text.includes('AEROBATIC SHIP — WHERE NEXT?'))).toBe(true);
+  });
+
+  it('never-seen aircraft keep their taglines off the tape', () => {
+    const { db, clubId } = setup();
+    const ghostId = Number(
+      db
+        .prepare(
+          "INSERT INTO aircraft (club_id, hex, registration, tagline, created_at, updated_at) VALUES (?, 'eeeeee', 'G-NEWB', 'Hard at work', 0, 0)"
+        )
+        .run(clubId).lastInsertRowid
+    );
+    expect(tickerItems(db, clubId, 'member').some((t) => t.text.includes('HARD AT WORK'))).toBe(false);
+    db.prepare('INSERT INTO positions (aircraft_id, ts, lat, lon) VALUES (?, ?, 51.35, 0.5)').run(ghostId, Date.now());
+    expect(tickerItems(db, clubId, 'member').some((t) => t.text.includes('HARD AT WORK'))).toBe(true);
   });
 
   it('custom broadcasts reach everyone but never leak into other clubs', () => {

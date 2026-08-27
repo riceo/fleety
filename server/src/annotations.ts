@@ -188,13 +188,16 @@ export function tickerItems(
     text: `${spoken(n.callsign || n.registration)}${n.mode === 'next_flight' ? ' NEXT FLIGHT' : ''} — ${n.text.toUpperCase()}`,
   }));
 
+  // Taglines join the tape only for aircraft actually seen recently — a
+  // freshly added guest shouldn't be announced before it has ever appeared.
   const taglines = db
     .prepare(
       `SELECT a.id AS aircraftId, a.registration, a.callsign, a.tagline FROM aircraft a
        WHERE a.club_id = ? AND a.deleted_at IS NULL AND a.enabled = 1 AND a.tagline != ''${visFilter}
+         AND EXISTS (SELECT 1 FROM positions p WHERE p.aircraft_id = a.id AND p.ts > ?)
        ORDER BY a.sort_order`
     )
-    .all(clubId) as { aircraftId: number; registration: string; callsign: string; tagline: string }[];
+    .all(clubId, now - 7 * 24 * 3600 * 1000) as { aircraftId: number; registration: string; callsign: string; tagline: string }[];
 
   const taglineItems: TickerItem[] = taglines.map((t) => ({
     ts: 0,

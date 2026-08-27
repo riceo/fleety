@@ -9,6 +9,7 @@ import { Ticker } from '../components/Ticker';
 import { FleetyMark } from '../components/TopBar';
 import { displayCallsign, fmtAgo, fmtAlt, fmtGs, fmtTime, fmtTimeUTC } from '../format';
 import { useEventSound } from '../sound';
+import { isSparkly } from '../sparkle';
 
 function webglAvailable(): boolean {
   try {
@@ -25,7 +26,7 @@ function BoardCard({ a, focused }: { a: LiveAircraft; focused: boolean }) {
   const airborne = a.status === 'airborne';
   return (
     <div
-      className={`board-card${focused ? ' focused' : ''}${airborne ? ' airborne' : ''}`}
+      className={`board-card${focused ? ' focused' : ''}${airborne ? ' airborne' : ''}${isSparkly(a) ? ' sparkle' : ''}`}
       style={{ ['--strip-color' as string]: a.color }}
     >
       {a.photoUrl && <div className="board-card-photo" style={{ backgroundImage: `url(${a.photoUrl})` }} />}

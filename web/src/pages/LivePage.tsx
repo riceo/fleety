@@ -8,6 +8,7 @@ import { TopBar } from '../components/TopBar';
 import { Ticker } from '../components/Ticker';
 import { displayCallsign, fmtAgo, fmtAlt, fmtGs } from '../format';
 import { useEventSound } from '../sound';
+import { isSparkly } from '../sparkle';
 import { LandingPage } from './PlatformPage';
 
 export function LivePage() {
@@ -135,7 +136,7 @@ export function LivePage() {
           </div>
 
           {selected && (
-            <div className="target-panel">
+            <div className={`target-panel${isSparkly(selected) ? ' sparkle' : ''}`}>
               <div className="target-head">
                 <span className="mono-label">TARGET DATA</span>
                 <button className="target-close" onClick={() => select(null)} aria-label="Close">

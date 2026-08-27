@@ -1,83 +1,88 @@
-# Invicta FleetView
+# Fleety
 
-A private, branded live flight tracker for [Invicta Aero Club](https://www.invictaaero.club/). Tracks the club fleet
-(and temporary guest aircraft) via ADS-B, records full position history with flight replay, and drives a
-plane-spotting kiosk screen for the clubhouse coffee shop.
+**Live ops boards for flying clubs** — [fleety.live](https://fleety.live)
 
-## Features
+Each club gets its own board at `<club>.fleety.live`: live ADS-B tracking of their fleet on a dark
+radar-style map, flight history with replay, a departures ticker, per-flight passenger messages, and a
+kiosk mode built for the clubhouse TV. Born as Invicta Aero Club's private tracker after their aircraft
+were removed from FlightRadar24; productised so any club can have one.
 
-- **Live map** — the whole fleet on a MapLibre map of Kent (and wherever they roam), with custom per-aircraft
-  icons, live trails, callsigns (INVxx), and a mobile-friendly layout.
-- **Private or public** — runtime toggle in the admin panel. Private mode requires member sign-in; flipping to
-  private also severs any anonymous live streams. Per-aircraft visibility can hide guests from public view.
-- **History & replay** — every flight is recorded and replayable with a time slider. Flight detection is a
-  state machine tolerant of the low-altitude coverage gaps GA aircraft suffer, with an admin merge/split tool
-  for the rare misfire.
-- **Admin panel** — add aircraft by registration (hex/type auto-lookup), upload icons and photos, manage
-  members, airfields, kiosk messages, settings, and watch poller health.
-- **Kiosk mode** (`/kiosk?token=…`) — dark 10-foot UI for a TV: auto-cycling camera, aircraft photo cards,
-  a scrolling ticker ("INV08 HAS TAKEN OFF FROM ROCHESTER — PAX: BOB AND JESS EXPERIENCE"), nightly
-  self-reload and a stale-feed watchdog. Messages can run until a set time or "for the next flight"
-  (armed at take-off, cleared at landing).
-- **Airfields on the map** — ~7,400 European airfields (OurAirports data) fade in with zoom; club bases
-  Rochester (EGTO) and Lydd (EGMD) get prominent red markers.
+## How it works
 
-## Data source
+- **Multi-tenant** — clubs own their fleet, airfields, branding (name, subheading, logo, accent colour,
+  one of four curated theme presets), callsign rules ("INV" → "INVICTA"), kiosk token and public/private
+  toggle. Users are global (email sign-in) with per-club memberships; platform admins manage clubs and
+  the global user list from `/platform`.
+- **One shared poller** batches every tracked hex across every club into chunked calls to the free,
+  unfiltered [adsb.lol](https://adsb.lol) API (ODbL) — upstream load stays near-constant as clubs join.
+  The provider layer is pluggable (ADSBexchange / airplanes.live / local `tar1090` receiver).
+- **Flight detection** is a per-aircraft state machine tolerant of the low-altitude coverage gaps GA
+  aircraft suffer, with departure/arrival airfield attribution, provisional endings, and an admin
+  merge/split escape hatch. Take-offs and landings feed each club's ticker and push live over SSE
+  (the kiosk board snaps focus to the aircraft; optional ping sound).
+- **History is recorded, not bought** — positions (with full raw ADS-B JSON for a retention window) are
+  stored from the moment the poller starts; no free source sells the past.
+- **Email** via [Resend](https://resend.com) for invites and password resets; without an API key,
+  admins get shareable links instead.
+- Stack: Fastify + TypeScript + better-sqlite3 (`server/`), React + Vite + MapLibre GL (`web/`),
+  single container. Tests: `cd server && npm test` (flight detection, annotations, sessions, and
+  cross-tenant isolation via injected requests).
 
-Live positions come from the free, unfiltered **[adsb.lol](https://adsb.lol)** API (ODbL) — one batched
-request per poll cycle for the whole fleet, adaptive 5s/30s cadence with backoff. The provider layer is
-pluggable (ADSBexchange / airplanes.live / a local receiver's `tar1090` JSON can be swapped in).
-
-History starts when the poller starts — no external source provides free historical GA data, which is why
-FleetView records everything itself (full raw JSON kept for a configurable window, parsed fields forever).
-
-**Best £80 upgrade**: a Raspberry Pi + RTL-SDR + antenna at Rochester feeding adsb.lol/ADSBexchange gives
-rock-solid low-altitude coverage right where the fleet flies (aggregators are weakest below ~1,500 ft),
-plus feeder API perks — and FleetView can then consume the receiver's JSON directly.
-
-## Running it
-
-### Local development
+## Local development
 
 ```bash
-# server (Fastify + SQLite; Node 22)
 cd server && npm install
-ADMIN_USER=admin ADMIN_PASSWORD=change-me npm run dev
+ADMIN_EMAIL=you@example.com ADMIN_PASSWORD=change-me npm run dev   # API on :8080
 
-# frontend (Vite dev server proxies /api to :8080)
-cd web && npm install && npm run dev
+cd web && npm install && npm run dev                               # Vite on :5173, proxies /api
 ```
 
-Tests: `cd server && npm test` (flight detector, annotations lifecycle, sessions).
+On localhost, requests fall back to the `DEFAULT_CLUB` (invicta). First run seeds the founding club,
+its 11-aircraft INVICTA fleet, Kent airfields, and the platform-admin account (forced password change).
 
-### VPS deployment (Docker Compose + Caddy)
+## Deploying on Coolify
 
-```bash
-cp .env.example .env       # set ADMIN_PASSWORD and SITE_DOMAIN
-docker compose up -d --build
-```
+The image is a single Dockerfile; Coolify's proxy (Traefik) terminates TLS — the bundled
+`docker-compose.yml`/`Caddyfile` are only for non-Coolify hosts.
 
-- Caddy terminates HTTPS for `SITE_DOMAIN` automatically (ports 80/443 must reach the box).
-- Everything stateful lives in `./data` (SQLite db, uploads, nightly `VACUUM INTO` backups, 14 kept).
-  Back that directory up off-box — the nightly backup file is safe to copy while running; the live db is not.
-  [Litestream](https://litestream.io) as a sidecar is the zero-effort offsite upgrade.
-- First run seeds the 11-aircraft fleet, club airfields, and the admin account from `.env`
-  (forced password change on first sign-in).
-- Optional: set a healthchecks.io URL in Admin → Settings so a silently-dead poller alerts someone.
+1. **New resource** → your GitHub repo (`riceo/fleety`), branch `main`, **Build pack: Dockerfile**.
+2. **Port:** `8080`.
+3. **Domains:** start explicit — `https://fleety.live,https://invicta.fleety.live` — each gets a
+   Let's Encrypt cert via HTTP-01 automatically. Add each new club's subdomain here as you create it
+   (or upgrade to a `*.fleety.live` wildcard later via Traefik's Cloudflare DNS-01 challenge).
+4. **Persistent storage:** add a **volume mount** to `/data` (a named volume, not a host-directory
+   bind — the container runs as a non-root user; a fresh host bind would be root-owned). Everything
+   stateful lives there: SQLite db, uploads, nightly `VACUUM INTO` backups (14 kept).
+5. **Environment variables:**
+   - `ADMIN_EMAIL`, `ADMIN_PASSWORD` — first-run platform admin (forced change on first sign-in)
+   - `BASE_DOMAIN=fleety.live`
+   - `RESEND_API_KEY`, `EMAIL_FROM="Fleety <ops@fleety.live>"` — optional (verify the domain in
+     Resend and add its DKIM/SPF records first)
+   - optional: `DEFAULT_CLUB=invicta`, `TZ=UTC`
+6. **Health check:** the image ships a `HEALTHCHECK` on `/healthz`; point Coolify's health check at
+   `/healthz` port `8080` too if you enable it.
+7. **DNS (Cloudflare):** `A fleety.live → <node IP>` and `A invicta.fleety.live → <node IP>`
+   (DNS-only / grey cloud, at least until certs are issued). Add an `A *.fleety.live` record when you
+   move to the wildcard cert.
+8. Deploy, then open `https://invicta.fleety.live`, sign in with `ADMIN_EMAIL`, set your real password,
+   and check Admin → Settings (kiosk link, branding) and `/platform`.
 
-### Kiosk (coffee-shop TV)
+SSE needs no special proxy config on Traefik. The apex (`fleety.live`) serves the Fleety landing page.
 
-1. Admin → Settings → copy the kiosk link (`/kiosk?token=…`); Rotate invalidates old screens.
-2. Drive the TV with a **Raspberry Pi 5 / mini-PC running Chromium in kiosk mode** — smart-TV browsers
-   have broken WebGL and aggressive tab-killing. `chromium --kiosk 'https://your-domain/kiosk?token=…'`
-3. The page reloads itself nightly at 03:00 and whenever the live feed stalls; if WebGL is unavailable it
-   falls back to a map-less departure board.
+### Kiosk TV
+
+Admin → Settings → copy the kiosk link. Drive the TV with a Pi 5 / mini-PC running
+`chromium --kiosk --autoplay-policy=no-user-gesture-required 'https://<club>.fleety.live/kiosk?token=…'`
+— smart-TV browsers have broken WebGL. The page self-reloads nightly and whenever the feed stalls, and
+falls back to a map-less departure board without WebGL. Members can also flip any screen into kiosk
+mode with the ▣ Kiosk button (click the club logo to exit).
 
 ## Notes
 
-- **Attribution**: map tiles by [OpenFreeMap](https://openfreemap.org) (© OpenMapTiles, data © OpenStreetMap
-  contributors); live ADS-B data via adsb.lol; airfield database from [OurAirports](https://ourairports.com)
+- **Attribution:** map tiles by [OpenFreeMap](https://openfreemap.org) (© OpenMapTiles, data © OSM
+  contributors); live data via adsb.lol; airfield database from [OurAirports](https://ourairports.com)
   (public domain). Keep the attribution visible.
-- **Privacy**: before enabling public mode, get club sign-off — and keep anything pilot-identifying
-  (kiosk messages included) behind login/members-only visibility if it names people.
-- Timestamps are stored in UTC; the UI renders Europe/London.
+- **Coverage upgrade:** a Raspberry Pi + RTL-SDR receiver at a club's home field feeding the
+  aggregators fixes the low-altitude blind spot where club aircraft actually fly.
+- **Privacy:** clubs decide their own public/private mode; anything naming people belongs in
+  members-only visibility. Timestamps are stored UTC; the UI renders Europe/London.

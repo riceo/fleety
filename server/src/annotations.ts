@@ -113,13 +113,16 @@ export function tickerItems(db: Database, audience: 'member' | 'restricted', now
   const visFilter = audience === 'member' ? '' : " AND a.visibility = 'public'";
 
   const eventVis = audience === 'member' ? '' : " AND (e.aircraft_id IS NULL OR a.visibility = 'public')";
+  // Departures/landings age off quickly (a busy circuit day would otherwise
+  // bury the tape); admin broadcasts run the full six hours.
   const events = db
     .prepare(
       `SELECT e.ts, e.text, e.aircraft_id AS aircraftId FROM ticker_events e
        LEFT JOIN aircraft a ON a.id = e.aircraft_id
-       WHERE e.ts > ?${eventVis} ORDER BY e.ts DESC LIMIT 20`
+       WHERE ((e.aircraft_id IS NOT NULL AND e.ts > ?) OR (e.aircraft_id IS NULL AND e.ts > ?))${eventVis}
+       ORDER BY e.ts DESC LIMIT 20`
     )
-    .all(now - 6 * 3600 * 1000) as TickerItem[];
+    .all(now - 45 * 60_000, now - 6 * 3600 * 1000) as TickerItem[];
 
   const notes = db
     .prepare(

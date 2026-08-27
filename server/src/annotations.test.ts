@@ -71,6 +71,23 @@ describe('kiosk annotations', () => {
     expect(emitted[0].visibility).toBe('public');
   });
 
+  it('flight events age off the tape after 45 minutes; broadcasts last 6 hours', () => {
+    const { db, aircraftId } = setup();
+    const now = Date.now();
+    db.prepare('INSERT INTO ticker_events (ts, aircraft_id, text) VALUES (?, ?, ?)').run(
+      now - 60 * 60_000,
+      aircraftId,
+      'INVICTA 08 HAS DEPARTED ROCHESTER!'
+    );
+    db.prepare('INSERT INTO ticker_events (ts, aircraft_id, text) VALUES (?, NULL, ?)').run(
+      now - 60 * 60_000,
+      'BBQ Saturday!'
+    );
+    const items = tickerItems(db, 'member', now);
+    expect(items.some((t) => t.text.includes('HAS DEPARTED'))).toBe(false);
+    expect(items.some((t) => t.text.includes('BBQ Saturday!'))).toBe(true);
+  });
+
   it('timed notes expire on their own', () => {
     const { db, aircraftId } = setup();
     db.prepare(

@@ -146,6 +146,34 @@ describe('security fixes', () => {
     expect(row.description).toBe('4-seat tourer'); // not wiped
   });
 
+  it('the share card renders for a public aircraft but 404s for members-only / private', async () => {
+    await w.app.inject({
+      method: 'PUT',
+      url: '/api/admin/settings',
+      headers: H('alpha.fleety.live', w.adminACookie),
+      payload: { publicMode: true },
+    });
+    w.db
+      .prepare("INSERT INTO aircraft (club_id, hex, registration, callsign, visibility, enabled, created_at, updated_at) VALUES (?, 'ccc111', 'G-PUB', 'INV01', 'public', 1, 0, 0)")
+      .run(w.clubA);
+    w.db
+      .prepare("INSERT INTO aircraft (club_id, hex, registration, visibility, enabled, created_at, updated_at) VALUES (?, 'ddd222', 'G-HID', 'members', 1, 0, 0)")
+      .run(w.clubA);
+    const pub = await w.app.inject({ method: 'GET', url: '/ac/G-PUB/og.jpg', headers: { host: 'alpha.fleety.live' } });
+    expect(pub.statusCode).toBe(200);
+    expect(pub.headers['content-type']).toBe('image/jpeg');
+    expect(pub.rawPayload.length).toBeGreaterThan(1000); // a real JPEG came back
+    // Members-only aircraft: no card.
+    const hid = await w.app.inject({ method: 'GET', url: '/ac/G-HID/og.jpg', headers: { host: 'alpha.fleety.live' } });
+    expect(hid.statusCode).toBe(404);
+    // Private club (bravo): no card even for a public aircraft.
+    w.db
+      .prepare("INSERT INTO aircraft (club_id, hex, registration, visibility, enabled, created_at, updated_at) VALUES (?, 'eee333', 'G-BRV', 'public', 1, 0, 0)")
+      .run(w.clubB);
+    const priv = await w.app.inject({ method: 'GET', url: '/ac/G-BRV/og.jpg', headers: { host: 'bravo.fleety.live' } });
+    expect(priv.statusCode).toBe(404);
+  });
+
   it('/uploads will not serve a members-only aircraft image to a public viewer, or another club file', async () => {
     // Public club A with one members-only aircraft whose photo is 'p.webp'.
     // Flip public mode through the API so the server's club cache reloads.

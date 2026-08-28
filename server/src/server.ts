@@ -30,8 +30,9 @@ import {
 } from './auth/sessions.js';
 import { dbFileSizeBytes } from './db/index.js';
 import { postTickerMessage, tickerItems, type TickerEmit } from './annotations.js';
-import { Clubs, type ClubRow } from './clubs.js';
+import { Clubs, displayCallsignFor, type ClubRow } from './clubs.js';
 import { emailConfigured, sendInviteEmail, sendResetEmail, sendWaitlistNotification } from './email.js';
+import { renderAircraftOgCard } from './og.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -1346,6 +1347,10 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
 
   // ---------- SPA shell with social/SEO meta ----------
 
+  // Short-lived in-memory cache of rendered share cards (see the og.jpg route).
+  const ogCache = new Map<string, { at: number; buf: Buffer }>();
+  const OG_CACHE_MS = 60_000;
+
   const escapeHtml = (s: string) =>
     s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
@@ -1353,6 +1358,7 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     title: string;
     description: string;
     image: string | null;
+    imageType?: string; // e.g. image/jpeg — set for generated share cards
     url: string;
     noindex: boolean;
   }
@@ -1381,6 +1387,16 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
       ...(meta.image
         ? [
             `<meta property="og:image" content="${escapeHtml(meta.image)}" />`,
+            `<meta property="og:image:secure_url" content="${escapeHtml(meta.image)}" />`,
+            ...(meta.imageType ? [`<meta property="og:image:type" content="${escapeHtml(meta.imageType)}" />`] : []),
+            // Our generated share cards are a fixed 1200×630; a logo may not be,
+            // so only advertise dimensions for the JPEG cards.
+            ...(meta.imageType === 'image/jpeg'
+              ? [
+                  `<meta property="og:image:width" content="1200" />`,
+                  `<meta property="og:image:height" content="630" />`,
+                ]
+              : []),
             `<meta name="twitter:image" content="${escapeHtml(meta.image)}" />`,
           ]
         : []),
@@ -1417,9 +1433,78 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
 
   app.get('/', async (req, reply) => renderShell(reply, shellMetaFor(req)));
 
-  // Deep link to one aircraft: /ac/G-PSZB (or its callsign). Aircraft details
-  // only appear in the preview when the club is public AND the aircraft is
-  // public-visibility — a shared private-club link reveals nothing.
+  // Shared gate for the aircraft deep-link preview and its share card: a rich
+  // preview is only produced for a PUBLIC club AND a PUBLIC-visibility aircraft
+  // — a shared private-club/members-only link echoes nothing back.
+  const publicAircraftFor = (club: ClubRow | null, reg: string) => {
+    if (!club || club.public_mode !== 1 || !reg) return undefined;
+    return db
+      .prepare(
+        `SELECT id, registration, callsign, type_name, nickname, description, tagline, photo_path FROM aircraft
+         WHERE club_id = ? AND deleted_at IS NULL AND visibility = 'public'
+           AND (registration = ? COLLATE NOCASE OR callsign = ? COLLATE NOCASE)`
+      )
+      .get(club.id, reg, reg) as
+      | {
+          id: number;
+          registration: string;
+          callsign: string;
+          type_name: string;
+          nickname: string;
+          description: string;
+          tagline: string;
+          photo_path: string | null;
+        }
+      | undefined;
+  };
+
+  const liveMetrics = (clubId: number, aircraftId: number) => {
+    const a = live.list(clubId, 'restricted').find((x) => x.id === aircraftId);
+    if (!a) return null;
+    return { status: a.status, altBaro: a.pos?.altBaro ?? null, gs: a.pos?.gs ?? null };
+  };
+
+  // Server-rendered JPEG share card for one aircraft (WhatsApp won't preview
+  // our webp photos, and this also bakes in the live details). Public only.
+  // Rendering is off the event loop (sharp's threadpool) and the response is
+  // cacheable; the rate limit caps deliberate cache-busting abuse.
+  app.get('/ac/:reg/og.jpg', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (req, reply) => {
+    const club = req.club;
+    const reg = String((req.params as { reg: string }).reg ?? '').trim();
+    const ac = publicAircraftFor(club, reg);
+    if (!club || !ac) return reply.code(404).send({ error: 'not_found' });
+    // Serve a recently-rendered card from memory: a shared link is scraped in
+    // bursts (WhatsApp/Slack/Twitter each hit it, plus retries), so the same
+    // card is asked for many times in seconds. One render per aircraft per
+    // OG_CACHE_MS covers that; the buffer is tiny (~30-120KB).
+    const key = `${club.id}:${ac.id}`;
+    const hit = ogCache.get(key);
+    if (hit && Date.now() - hit.at < OG_CACHE_MS) {
+      return reply.type('image/jpeg').header('Cache-Control', 'public, max-age=300').send(hit.buf);
+    }
+    const spoken = displayCallsignFor(ac.callsign || '', clubs.rules(club));
+    const card = await renderAircraftOgCard({
+      uploadsDir: uploadsDir(),
+      photoPath: ac.photo_path,
+      accent: club.accent,
+      clubName: club.name,
+      displayCallsign: spoken || ac.registration,
+      registration: ac.registration,
+      typeName: ac.type_name,
+      nickname: ac.nickname,
+      description: ac.description,
+      tagline: ac.tagline,
+      live: liveMetrics(club.id, ac.id),
+    });
+    ogCache.set(key, { at: Date.now(), buf: card });
+    if (ogCache.size > 200) {
+      // Bounded: drop the oldest entries so the cache can't grow unbounded.
+      for (const k of [...ogCache.keys()].slice(0, ogCache.size - 200)) ogCache.delete(k);
+    }
+    return reply.type('image/jpeg').header('Cache-Control', 'public, max-age=300').send(card);
+  });
+
+  // Deep link to one aircraft: /ac/G-PSZB (or its callsign).
   app.get('/ac/:reg', async (req, reply) => {
     const club = req.club;
     const reg = String((req.params as { reg: string }).reg ?? '').trim();
@@ -1427,23 +1512,28 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     // Until the aircraft qualifies for a rich preview, the canonical URL is
     // the club root — private-club deep links echo nothing back.
     meta.url = `${baseUrl(req)}/`;
-    if (club && club.public_mode === 1 && reg) {
-      const ac = db
-        .prepare(
-          `SELECT registration, callsign, type_name, nickname, description, photo_path FROM aircraft
-           WHERE club_id = ? AND deleted_at IS NULL AND visibility = 'public'
-             AND (registration = ? COLLATE NOCASE OR callsign = ? COLLATE NOCASE)`
-        )
-        .get(club.id, reg, reg) as
-        | { registration: string; callsign: string; type_name: string; nickname: string; description: string; photo_path: string | null }
-        | undefined;
-      if (ac) {
-        const label = ac.callsign || ac.registration;
-        meta.title = `${label} · ${ac.registration} — live on ${club.name}`;
-        meta.description = ac.description || `${ac.nickname || ac.type_name} — track it live on the ${club.name} ops board.`;
-        meta.url = `${baseUrl(req)}/ac/${encodeURIComponent(ac.registration)}`;
-        if (ac.photo_path) meta.image = `${baseUrl(req)}/uploads/${ac.photo_path}`;
-      }
+    const ac = publicAircraftFor(club, reg);
+    if (club && ac) {
+      const spoken = displayCallsignFor(ac.callsign || '', clubs.rules(club));
+      const label = spoken || ac.registration;
+      const m = liveMetrics(club.id, ac.id);
+      const liveLine =
+        m?.status === 'airborne'
+          ? `Airborne now${m.altBaro != null ? ` at ${Math.round(m.altBaro).toLocaleString()} ft` : ''}${m.gs != null ? `, ${Math.round(m.gs)} kt` : ''}.`
+          : m?.status === 'awake'
+            ? 'Transponder live.'
+            : m?.status === 'ground'
+              ? 'On the ground.'
+              : '';
+      const blurb = ac.description || ac.tagline || `${ac.nickname || ac.type_name}`;
+      meta.title = `${label} · ${ac.registration} — live on ${club.name}`;
+      meta.description = [`${ac.type_name}${ac.nickname ? ` “${ac.nickname}”` : ''}.`, liveLine, blurb]
+        .filter(Boolean)
+        .join(' ')
+        .trim();
+      meta.url = `${baseUrl(req)}/ac/${encodeURIComponent(ac.registration)}`;
+      meta.image = `${baseUrl(req)}/ac/${encodeURIComponent(ac.registration)}/og.jpg`;
+      meta.imageType = 'image/jpeg';
     }
     return renderShell(reply, meta);
   });

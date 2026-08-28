@@ -22,8 +22,10 @@ ENV NODE_ENV=production \
     DATA_DIR=/data \
     WEB_DIST=/app/web/dist \
     PORT=8080
-# curl is only here for platform healthchecks (Coolify probes with curl/wget)
-RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/* \
+# curl: platform healthchecks (Coolify probes with curl/wget).
+# fonts-dejavu-core + fontconfig: so sharp/librsvg can render text into the
+# generated social share cards (no system font => blank text).
+RUN apt-get update && apt-get install -y --no-install-recommends curl fonts-dejavu-core fontconfig && rm -rf /var/lib/apt/lists/* \
     && useradd -r -u 10001 fleetview && mkdir -p /data && chown fleetview /data
 WORKDIR /app
 COPY --from=serverbuild /app/server/node_modules server/node_modules

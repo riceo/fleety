@@ -11,7 +11,7 @@ export class AdsbLolProvider implements AdsbProvider {
     const url = `${this.base}/v2/hex/${hexes.join(',')}`;
     const res = await fetch(url, {
       headers: { 'User-Agent': config.userAgent, Accept: 'application/json' },
-      signal: AbortSignal.timeout(15000),
+      signal: AbortSignal.timeout(8000),
     });
     if (!res.ok) throw new ProviderHttpError(res.status, `adsb.lol responded ${res.status}`);
     const body = (await res.json()) as { ac?: ReadsbAircraft[] };

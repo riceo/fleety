@@ -64,7 +64,9 @@ const T = {
   rssMb: { watch: numEnv('ALERT_RSS_WATCH_MB', 500), alert: numEnv('ALERT_RSS_MB', 800) },
   diskFreePct: { watch: numEnv('ALERT_DISK_WATCH_PCT', 20), alert: numEnv('ALERT_DISK_PCT', 10) },
   dbSizeMb: { watch: numEnv('ALERT_DB_WATCH_MB', 2000), alert: numEnv('ALERT_DB_MB', 5000) },
-  pollMs: { watch: numEnv('ALERT_POLL_WATCH_MS', 4000), alert: numEnv('ALERT_POLL_MS', 8000) },
+  // Average cycle time vs the 5 s active interval: watch as it approaches, alert
+  // when it reaches/exceeds it (the poller can't keep up).
+  pollMs: { watch: numEnv('ALERT_POLL_WATCH_MS', 3500), alert: numEnv('ALERT_POLL_MS', 5000) },
   sseClients: { watch: numEnv('ALERT_SSE_WATCH', 300), alert: numEnv('ALERT_SSE', 800) },
 };
 
@@ -144,18 +146,21 @@ export function collectMetrics(db: Database, live: LiveBus): MetricsReport {
   });
 
   // --- poll cycle duration (recent) ---
+  // Health tracks the AVERAGE (is the poller sustainably keeping up?), not the
+  // max — a single upstream provider timeout shouldn't flag "scale". Max is
+  // shown for context only.
   const poll = db
     .prepare('SELECT AVG(duration_ms) a, MAX(duration_ms) m FROM (SELECT duration_ms FROM poll_log ORDER BY id DESC LIMIT 20)')
     .get() as { a: number | null; m: number | null };
-  const pollMax = poll.m ?? 0;
+  const pollAvg = poll.a ?? 0;
   metrics.push({
     key: 'poll',
     label: 'Poll cycle',
-    value: pollMax,
+    value: pollAvg,
     unit: 'ms',
-    display: `${Math.round(poll.a ?? 0)} ms avg · ${Math.round(pollMax)} ms max (last 20)`,
-    health: hi(pollMax, T.pollMs),
-    note: 'If a cycle regularly exceeds the 5 s active interval, the poller can no longer keep up with the fleet — DB writes are the usual cause.',
+    display: `${Math.round(pollAvg)} ms avg · ${Math.round(poll.m ?? 0)} ms max (last 20)`,
+    health: hi(pollAvg, T.pollMs),
+    note: 'Average cycle time. Approaching the 5 s active interval means the poller can no longer keep up with the fleet — DB writes are the usual cause. A high one-off max is just an upstream provider timing out.',
   });
 
   // --- SSE clients ---

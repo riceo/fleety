@@ -39,6 +39,10 @@ export const config = {
   emailFrom: env.EMAIL_FROM || 'Fleety <ops@fleety.live>',
   // Operator ping for new waitlist signups.
   waitlistNotifyEmail: env.WAITLIST_NOTIFY_EMAIL || 'cube@sneakybox.com',
+  // Where infra alerts go. Email (via Resend) defaults to the waitlist address;
+  // an optional webhook (Slack/Discord incoming webhook) also receives JSON.
+  alertEmail: env.ALERT_EMAIL || env.WAITLIST_NOTIFY_EMAIL || 'cube@sneakybox.com',
+  alertWebhook: env.ALERT_WEBHOOK || '',
   publicBaseUrl: env.PUBLIC_BASE_URL || '', // e.g. https://invicta.fleety.live (per-club links derive from club slug)
   userAgent: 'Fleety/1.0 (club fleet tracker; https://fleety.live)',
 };

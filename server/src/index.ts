@@ -8,6 +8,8 @@ import { Settings } from './settings.js';
 import { LiveBus } from './live/liveBus.js';
 import { FlightDetector } from './tracking/flightDetector.js';
 import { Poller } from './tracking/poller.js';
+import { startEventLoopMonitor, evaluateAndAlert, type AlertSink } from './metrics.js';
+import { sendAlert } from './email.js';
 import { AdsbLolProvider } from './providers/adsbLol.js';
 import { AdsbFiProvider } from './providers/adsbFi.js';
 import { AdsbxProvider } from './providers/adsbx.js';
@@ -81,13 +83,26 @@ async function main() {
   const app = await buildServer({ db, settings, live, poller, detector, clubs, webDist });
 
   poller.start();
+  startEventLoopMonitor();
   const heartbeat = setInterval(() => live.heartbeat(), 25_000);
   const nightly = scheduleNightly(db, settings, (msg) => app.log.info(msg));
+
+  // Every 5 min: evaluate the scaling signals and alert (email + optional
+  // webhook) when one crosses its threshold, debounced to hourly per metric.
+  const alertSink: AlertSink = {
+    get: (k, fb) => settings.get(k, fb ?? ''),
+    set: (k, v) => settings.set(k, v),
+    send: (subject, lines) => sendAlert(subject, lines),
+  };
+  const metricsTimer = setInterval(() => {
+    void evaluateAndAlert(db, live, alertSink).catch((e) => app.log.error(e));
+  }, 5 * 60_000);
 
   const shutdown = async (signal: string) => {
     app.log.info(`${signal} received, shutting down`);
     clearInterval(heartbeat);
     clearInterval(nightly);
+    clearInterval(metricsTimer);
     poller.stop();
     await app.close().catch(() => {});
     closeDb();

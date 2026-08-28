@@ -33,6 +33,7 @@ import { postTickerMessage, tickerItems, type TickerEmit } from './annotations.j
 import { Clubs, displayCallsignFor, type ClubRow } from './clubs.js';
 import { emailConfigured, sendInviteEmail, sendResetEmail, sendWaitlistNotification } from './email.js';
 import { renderAircraftOgCard } from './og.js';
+import { collectMetrics } from './metrics.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -1207,6 +1208,7 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
       poller: { lastPollAt: poller.lastPollAt, ok: poller.lastPollOk, error: poller.lastPollError },
       recentPolls: db.prepare('SELECT * FROM poll_log ORDER BY ts DESC LIMIT 30').all(),
       dbSizeBytes: dbFileSizeBytes(),
+      health: collectMetrics(db, live),
     };
   });
 

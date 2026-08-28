@@ -310,10 +310,18 @@ export function PlatformPage() {
 
 // ---------- shared-feed status (platform-wide poll log + DB size) ----------
 
+interface HealthMetric {
+  key: string;
+  label: string;
+  display: string;
+  health: 'ok' | 'watch' | 'alert';
+  note: string;
+}
 interface PlatformStatusRes {
   poller: { lastPollAt: number; ok: boolean; error: string | null };
   recentPolls: { ts: number; provider: string; ok: number; error: string | null; aircraft_returned: number; duration_ms: number }[];
   dbSizeBytes: number;
+  health: { uptimeSec: number; worst: 'ok' | 'watch' | 'alert'; projectionNote: string; metrics: HealthMetric[] };
 }
 
 function PlatformStatus() {
@@ -329,8 +337,28 @@ function PlatformStatus() {
     return () => clearInterval(t);
   }, [load]);
   if (!data) return null;
+  const fmtUptime = (s: number) => (s >= 86400 ? `${Math.floor(s / 86400)}d ${Math.floor((s % 86400) / 3600)}h` : s >= 3600 ? `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m` : `${Math.floor(s / 60)}m`);
   return (
     <>
+      <h1 style={{ marginTop: '2rem' }}>Platform — health</h1>
+      <p className="muted small">
+        Single-box vitals. <strong>Watch</strong> means keep an eye on it; <strong>Alert</strong> means act soon
+        (an email/webhook also fires). Uptime {fmtUptime(data.health.uptimeSec)}.
+        {data.health.projectionNote ? ` ${data.health.projectionNote}` : ''}
+      </p>
+      <div className="health-grid">
+        {data.health.metrics.map((m) => (
+          <div key={m.key} className={`health-tile health-${m.health}`}>
+            <div className="health-top">
+              <span className="health-dot" />
+              <label>{m.label}</label>
+            </div>
+            <strong>{m.display}</strong>
+            <span className="muted small">{m.note}</span>
+          </div>
+        ))}
+      </div>
+
       <h1 style={{ marginTop: '2rem' }}>Platform — data feed</h1>
       <p className="muted small">
         The poller is shared across every club: {data.poller.ok ? 'healthy' : 'failing'}, last poll{' '}

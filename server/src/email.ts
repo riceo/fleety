@@ -50,6 +50,29 @@ export function sendInviteEmail(to: string, clubName: string, link: string): Pro
   );
 }
 
+// Infra alert (metrics crossed a threshold). Best-effort to email + webhook.
+export async function sendAlert(subject: string, lines: string[]): Promise<void> {
+  const body = lines.map((l) => `• ${l}`).join('\n');
+  await send(
+    config.alertEmail,
+    subject,
+    shell(
+      esc(subject),
+      `<p>Fleety flagged the following on the ops box:</p><ul>${lines.map((l) => `<li>${esc(l)}</li>`).join('')}</ul><p>Check Platform → Health.</p>`,
+      { href: `https://${config.baseDomain}/platform`, label: 'Open platform health' }
+    )
+  ).catch(() => {});
+  if (config.alertWebhook) {
+    // Slack/Discord-compatible: both accept a JSON body with a "text" field.
+    await fetch(config.alertWebhook, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: `*${subject}*\n${body}` }),
+      signal: AbortSignal.timeout(10_000),
+    }).catch(() => {});
+  }
+}
+
 // Operator ping when someone joins the landing-page waitlist.
 export function sendWaitlistNotification(signupEmail: string, marketing: boolean): Promise<boolean> {
   return send(

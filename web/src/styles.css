@@ -1682,6 +1682,70 @@ label.check {
   gap: 0.8rem;
   margin: 0.9rem 0 1.4rem;
 }
+
+/* ---------- platform health tiles ---------- */
+.health-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 0.7rem;
+  margin: 0.9rem 0 1.4rem;
+}
+.health-tile {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--line-strong);
+  border-radius: 2px;
+  padding: 0.8rem 0.95rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.health-tile strong {
+  font-family: var(--font-mono);
+  font-size: 1.05rem;
+}
+.health-top {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+.health-top label {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+.health-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--ink-dim);
+}
+.health-tile .small {
+  line-height: 1.35;
+}
+.health-ok {
+  border-left-color: #3ddc84;
+}
+.health-ok .health-dot {
+  background: #3ddc84;
+}
+.health-watch {
+  border-left-color: #f5b301;
+}
+.health-watch .health-dot {
+  background: #f5b301;
+}
+.health-alert {
+  border-left-color: var(--red);
+  background: color-mix(in srgb, var(--red) 8%, var(--surface));
+}
+.health-alert .health-dot {
+  background: var(--red);
+  box-shadow: 0 0 8px var(--red);
+}
 .stat-tile {
   background: var(--surface);
   border: 1px solid var(--line);

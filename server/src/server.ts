@@ -34,6 +34,7 @@ import { Clubs, displayCallsignFor, type ClubRow } from './clubs.js';
 import { emailConfigured, sendInviteEmail, sendResetEmail, sendWaitlistNotification } from './email.js';
 import { renderAircraftOgCard } from './og.js';
 import { collectMetrics } from './metrics.js';
+import { escapeHtml } from './escape.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -600,7 +601,15 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     const id = Number((req.params as { id: string }).id);
     if (!clubAircraft(club, id)) return reply.code(404).send({ error: 'not_found' });
     const enabled = !!(req.body as { enabled?: boolean } | null)?.enabled;
-    db.prepare('UPDATE aircraft SET enabled = ?, updated_at = ? WHERE id = ?').run(enabled ? 1 : 0, Date.now(), id);
+    // Re-enabling a guest whose track-until has already passed clears the stale
+    // date, so the poller's auto-expire doesn't flip it straight back off.
+    if (enabled) {
+      db.prepare(
+        "UPDATE aircraft SET enabled = 1, track_until = CASE WHEN track_until < date('now') THEN NULL ELSE track_until END, updated_at = ? WHERE id = ?"
+      ).run(Date.now(), id);
+    } else {
+      db.prepare('UPDATE aircraft SET enabled = 0, updated_at = ? WHERE id = ?').run(Date.now(), id);
+    }
     audit(req, 'aircraft.enabled', `${id} ${enabled}`);
     return { ok: true };
   });
@@ -1353,9 +1362,6 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
   const ogCache = new Map<string, { at: number; buf: Buffer }>();
   const OG_CACHE_MS = 60_000;
 
-  const escapeHtml = (s: string) =>
-    s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-
   interface ShellMeta {
     title: string;
     description: string;
@@ -1487,10 +1493,10 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     const bucket = shareBucket(req); // null => evergreen; else a live snapshot
     // In-process cache absorbs the scrape burst (WhatsApp/Slack/Twitter each
     // hit it, plus retries). Keyed by bucket so a new minute renders fresh and
-    // the evergreen card is its own entry. Evergreen is cached hard at the edge
-    // (it only changes with the photo/description); a bucketed live card gets a
-    // short edge TTL that still covers the minute it's valid for.
-    const maxAge = bucket ? 120 : 86400;
+    // the evergreen card is its own entry. Both get a modest edge TTL — long
+    // enough for Cloudflare to soak up a burst, short enough that making an
+    // aircraft/club private revokes the (photo-bearing) card within minutes.
+    const maxAge = bucket ? 120 : 600;
     const key = `${club.id}:${ac.id}:${bucket ?? 'ever'}`;
     const hit = ogCache.get(key);
     if (hit && Date.now() - hit.at < OG_CACHE_MS) {
@@ -1513,10 +1519,9 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
       live: bucket ? liveMetrics(club.id, ac.id) : null,
     });
     ogCache.set(key, { at: Date.now(), buf: card });
-    if (ogCache.size > 200) {
-      // Bounded: drop the oldest entries so the cache can't grow unbounded.
-      for (const k of [...ogCache.keys()].slice(0, ogCache.size - 200)) ogCache.delete(k);
-    }
+    // Bounded: Map is insertion-ordered, so drop the oldest without copying the
+    // whole keyset on every insert.
+    while (ogCache.size > 200) ogCache.delete(ogCache.keys().next().value as string);
     return reply.type('image/jpeg').header('Cache-Control', `public, max-age=${maxAge}`).send(card);
   });
 

@@ -201,16 +201,20 @@ export function KioskPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focused?.id, viewMode, live.fleet.length === 0]);
 
-  // Overview refit: aircraft drift out of frame between focus changes.
+  // Overview refit: aircraft drift out of frame between focus changes. Read the
+  // current focus through a ref so the interval isn't torn down and recreated
+  // on every ~12s focus cycle (which meant it rarely reached its 20s period).
+  const focusedIdRef = useRef<number | null>(null);
+  focusedIdRef.current = focused?.id ?? null;
   useEffect(() => {
     if (viewMode !== 'overview') return;
     const t = setInterval(() => {
-      if (focused) mapRef.current?.fitOverviewOn(focused.id);
+      const id = focusedIdRef.current;
+      if (id != null) mapRef.current?.fitOverviewOn(id);
       else mapRef.current?.fitOverview();
     }, 20_000);
     return () => clearInterval(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewMode, focused?.id]);
+  }, [viewMode]);
 
   // TVs run for weeks — pick up settings changes without a manual reload.
   useEffect(() => {

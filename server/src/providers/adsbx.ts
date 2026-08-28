@@ -38,10 +38,11 @@ export class AdsbxProvider implements AdsbProvider {
         lastError = err;
       }
     }
-    // Surface an error only when nothing at all came back (so the poller's
-    // cooldown/backoff still engages on a total outage), never when we salvaged
-    // at least one hex's fix.
+    // Total failure throws (poller engages cooldown + honest logging). A
+    // partial failure keeps the salvaged, already-paid fixes but flags itself
+    // so the poller still backs off (e.g. a 429 on one hex of the batch).
     if (lastError && out.positions.length === 0 && out.presences.length === 0) throw lastError;
+    if (lastError) out.partial = true;
     return out;
   }
 }

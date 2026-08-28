@@ -1,4 +1,5 @@
 import { config } from './config.js';
+import { escapeHtml } from './escape.js';
 
 // Outbound mail via Resend's REST API. When RESEND_API_KEY is not set,
 // senders fall back to handing the admin a shareable link instead.
@@ -34,8 +35,7 @@ const shell = (title: string, body: string, cta: { href: string; label: string }
 </div>`;
 
 // Club names are admin-controlled and land in email HTML, so escape them.
-const esc = (s: string): string =>
-  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+const esc = escapeHtml;
 
 export function sendInviteEmail(to: string, clubName: string, link: string): Promise<boolean> {
   const safe = esc(clubName);

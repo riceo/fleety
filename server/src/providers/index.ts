@@ -3,6 +3,9 @@ import type { NormPosition, NormPresence } from '../types.js';
 export interface ProviderStates {
   positions: NormPosition[];
   presences: NormPresence[];
+  // Set when some (but not all) of a multi-request batch failed — the caller
+  // keeps the salvaged data but should still back the provider off.
+  partial?: boolean;
 }
 
 export interface AdsbProvider {

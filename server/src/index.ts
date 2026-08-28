@@ -8,7 +8,7 @@ import { Settings } from './settings.js';
 import { LiveBus } from './live/liveBus.js';
 import { FlightDetector } from './tracking/flightDetector.js';
 import { Poller } from './tracking/poller.js';
-import { startEventLoopMonitor, evaluateAndAlert, type AlertSink } from './metrics.js';
+import { startEventLoopMonitor, resetLoopWindow, evaluateAndAlert, type AlertSink } from './metrics.js';
 import { sendAlert } from './email.js';
 import { AdsbLolProvider } from './providers/adsbLol.js';
 import { AdsbFiProvider } from './providers/adsbFi.js';
@@ -97,12 +97,16 @@ async function main() {
   const metricsTimer = setInterval(() => {
     void evaluateAndAlert(db, live, alertSink).catch((e) => app.log.error(e));
   }, 5 * 60_000);
+  // Roll the event-loop delay window hourly (decoupled from alerting) so the
+  // dashboard shows a stable last-hour p99 rather than one wiped every 5 min.
+  const loopReset = setInterval(() => resetLoopWindow(), 60 * 60_000);
 
   const shutdown = async (signal: string) => {
     app.log.info(`${signal} received, shutting down`);
     clearInterval(heartbeat);
     clearInterval(nightly);
     clearInterval(metricsTimer);
+    clearInterval(loopReset);
     poller.stop();
     await app.close().catch(() => {});
     closeDb();
@@ -113,6 +117,11 @@ async function main() {
 
   await app.listen({ port: config.port, host: config.host });
   app.log.info(`Fleety listening on :${config.port}, serving web from ${webDist}`);
+  if (config.production && !process.env.TRUST_PROXY) {
+    app.log.warn(
+      'TRUST_PROXY is not set (defaulting to 1 hop). Behind Cloudflare→Coolify set TRUST_PROXY=2 so req.ip — and every rate limit — is keyed to the real client, not a shared proxy IP.'
+    );
+  }
 }
 
 main().catch((err) => {

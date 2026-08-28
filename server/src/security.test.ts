@@ -128,6 +128,24 @@ describe('security fixes', () => {
     expect(m).toBeTruthy();
   });
 
+  it('re-enabling a lapsed guest clears the past track-until so it is not auto-disabled again', async () => {
+    const acId = Number(
+      w.db
+        .prepare("INSERT INTO aircraft (club_id, hex, registration, category, track_until, enabled, created_at, updated_at) VALUES (?, 'ggg555', 'G-GST', 'guest', '2000-01-01', 0, 0, 0)")
+        .run(w.clubA).lastInsertRowid
+    );
+    const res = await w.app.inject({
+      method: 'POST',
+      url: `/api/admin/aircraft/${acId}/enabled`,
+      headers: H('alpha.fleety.live', w.adminACookie),
+      payload: { enabled: true },
+    });
+    expect(res.statusCode).toBe(200);
+    const row = w.db.prepare('SELECT enabled, track_until FROM aircraft WHERE id = ?').get(acId) as { enabled: number; track_until: string | null };
+    expect(row.enabled).toBe(1);
+    expect(row.track_until).toBeNull(); // stale past date cleared so it sticks
+  });
+
   it('the tracking toggle preserves the description', async () => {
     const acId = Number(
       w.db
@@ -185,10 +203,11 @@ describe('security fixes', () => {
       .prepare("INSERT INTO aircraft (club_id, hex, registration, callsign, visibility, enabled, created_at, updated_at) VALUES (?, 'fff444', 'G-EVR', 'INV01', 'public', 1, 0, 0)")
       .run(w.clubA);
 
-    // Bare URL: durable card, cached hard (24h), no ?s echoed into the image.
+    // Bare URL: durable card, modest edge TTL (revocation propagates in mins),
+    // no ?s echoed into the image.
     const ever = await w.app.inject({ method: 'GET', url: '/ac/G-EVR/og.jpg', headers: { host: 'alpha.fleety.live' } });
     expect(ever.statusCode).toBe(200);
-    expect(ever.headers['cache-control']).toContain('max-age=86400');
+    expect(ever.headers['cache-control']).toContain('max-age=600');
     const everShell = await w.app.inject({ method: 'GET', url: '/ac/G-EVR', headers: { host: 'alpha.fleety.live' } });
     expect(everShell.body).toContain('/ac/G-EVR/og.jpg" '); // clean image URL, no ?s
     expect(everShell.body).toContain('Track it live'); // durable tail, no altitude
@@ -202,7 +221,7 @@ describe('security fixes', () => {
 
     // A junk ?s (non-numeric) is ignored — treated as the evergreen card.
     const junk = await w.app.inject({ method: 'GET', url: '/ac/G-EVR/og.jpg?s=evil', headers: { host: 'alpha.fleety.live' } });
-    expect(junk.headers['cache-control']).toContain('max-age=86400');
+    expect(junk.headers['cache-control']).toContain('max-age=600');
   });
 
   it('/uploads will not serve a members-only aircraft image to a public viewer, or another club file', async () => {

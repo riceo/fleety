@@ -47,6 +47,18 @@ export function resetLoopWindow(): void {
 
 const MB = 1024 * 1024;
 
+// The all-flights position sum scans an ever-growing table; cache it (the
+// bytes-per-row ratio it feeds is effectively constant between polls).
+let totalRowsCache = { at: 0, rows: 1 };
+function cachedTotalRows(db: Database): number {
+  const now = Date.now();
+  if (now - totalRowsCache.at > 10 * 60_000) {
+    const rows = (db.prepare('SELECT COALESCE(SUM(position_count),0) c FROM flights').get() as { c: number }).c || 1;
+    totalRowsCache = { at: now, rows };
+  }
+  return totalRowsCache.rows;
+}
+
 const T = {
   loopP99Ms: { watch: numEnv('ALERT_LOOP_P99_WATCH_MS', 50), alert: numEnv('ALERT_LOOP_P99_MS', 150) },
   rssMb: { watch: numEnv('ALERT_RSS_WATCH_MB', 500), alert: numEnv('ALERT_RSS_MB', 800) },
@@ -114,7 +126,7 @@ export function collectMetrics(db: Database, live: LiveBus): MetricsReport {
     label: 'Disk free',
     value: freePct,
     unit: '%',
-    display: disk ? `${freePct!.toFixed(0)}% free · ${(disk.freeBytes / 1024 / MB).toFixed(1)} GB` : 'unknown',
+    display: freePct !== null && disk ? `${freePct.toFixed(0)}% free · ${(disk.freeBytes / 1024 / MB).toFixed(1)} GB` : 'unknown',
     health: freePct === null ? 'watch' : lo(freePct, T.diskFreePct),
     note: 'Position history grows forever by design. When this trends down, thin old rows or move to a bigger volume.',
   });
@@ -163,9 +175,10 @@ export function collectMetrics(db: Database, live: LiveBus): MetricsReport {
     (db.prepare("SELECT COALESCE(SUM(position_count),0) c FROM flights WHERE started_at > ?").get(now - 86_400_000) as { c: number }).c;
   let projectionNote = '';
   if (disk && dayRows > 0 && dbMb > 0) {
-    // Rough bytes/row from the live DB, projected against free disk.
-    const totalRows = (db.prepare('SELECT COALESCE(SUM(position_count),0) c FROM flights').get() as { c: number }).c || 1;
-    const bytesPerRow = (dbMb * MB) / totalRows;
+    // Rough bytes/row from the live DB. The all-flights sum scans the whole
+    // (ever-growing) table, so cache it for 10 min — it barely moves between
+    // polls, and this path runs every 10 s while a health tab is open.
+    const bytesPerRow = (dbMb * MB) / cachedTotalRows(db);
     const daysLeft = disk.freeBytes / Math.max(dayRows * bytesPerRow, 1);
     projectionNote =
       daysLeft < 3650
@@ -201,17 +214,20 @@ export async function evaluateAndAlert(db: Database, live: LiveBus, sink: AlertS
   const now = Date.now();
   const firing: Metric[] = [];
   for (const m of report.metrics) {
-    if (m.health === 'alert') {
-      if (!state[m.key] || now - state[m.key] > REALERT_MS) {
-        firing.push(m);
-        state[m.key] = now;
-      }
-    } else if (state[m.key]) {
-      delete state[m.key]; // recovered — allow immediate re-alert next time
+    if (m.health !== 'alert') continue;
+    // Re-alert at most hourly per metric. We do NOT clear the timestamp the
+    // moment it dips to ok/watch — otherwise a metric flapping around its
+    // threshold would re-alert on every re-entry. The hourly window is the
+    // only gate, and old entries are pruned below.
+    if (!state[m.key] || now - state[m.key] > REALERT_MS) {
+      firing.push(m);
+      state[m.key] = now;
     }
   }
+  // Forget entries older than 2× the window so state can't grow without bound
+  // and a long-recovered metric re-alerts promptly on a genuinely new breach.
+  for (const k of Object.keys(state)) if (now - state[k] > 2 * REALERT_MS) delete state[k];
   sink.set(ALERT_KEY, JSON.stringify(state));
-  resetLoopWindow(); // roll the event-loop window each interval
 
   if (firing.length > 0) {
     await sink.send(

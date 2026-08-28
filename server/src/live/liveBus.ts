@@ -210,6 +210,9 @@ export class LiveBus {
     if (a.flightId !== flightId) {
       a.trail = [];
       ch.trailResets.add(aircraftId);
+      // Drop any points accumulated for the OLD flight this flush window, or a
+      // stale earlier fix would ride into the new flight's trail on the client.
+      ch.dirty.set(aircraftId, null);
     }
     a.flightId = flightId;
     a.liveCallsign = p.callsign ?? a.liveCallsign;

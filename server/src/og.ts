@@ -1,6 +1,7 @@
 import sharp from 'sharp';
 import fs from 'node:fs';
 import path from 'node:path';
+import { escapeXml } from './escape.js';
 
 const W = 1200;
 const H = 630;
@@ -20,8 +21,7 @@ export interface OgCardInput {
   live: { status: string; altBaro: number | null; gs: number | null } | null;
 }
 
-const xml = (s: string): string =>
-  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+const xml = escapeXml;
 
 const truncate = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n - 1).trimEnd()}…` : s);
 
@@ -32,7 +32,9 @@ const safeAccent = (a: string): string => (/^#[0-9a-fA-F]{6}$/.test(a) ? a : '#e
 // call-to-action, so a card cached by a scraper for days never goes stale.
 function bottomChips(input: OgCardInput): { label: string; value: string }[] {
   const live = input.live;
-  if (!live) return [{ label: 'LIVE TRACKING', value: `Follow on the ${input.clubName} board` }];
+  // No club name here — the header already carries it, and an unbounded name
+  // would overflow this line.
+  if (!live) return [{ label: 'LIVE TRACKING', value: 'Follow the flight on the ops board' }];
   if (live.status === 'airborne') {
     const chips = [{ label: 'STATUS', value: 'AIRBORNE' }];
     if (live.altBaro != null) chips.push({ label: 'ALT', value: `${Math.round(live.altBaro).toLocaleString()} ft` });
@@ -53,18 +55,26 @@ export async function renderAircraftOgCard(input: OgCardInput): Promise<Buffer> 
   const accent = safeAccent(input.accent);
   const FONT = 'DejaVu Sans, Arial, sans-serif';
 
-  let base: sharp.Sharp;
+  const darkBg = (): sharp.Sharp =>
+    sharp({ create: { width: W, height: H, channels: 4, background: { r: 6, g: 10, b: 20, alpha: 1 } } });
+
+  // Decode the photo to a fixed-size buffer up front so a corrupt/truncated
+  // file fails HERE (sharp() is lazy — the decode is otherwise deferred to the
+  // final toBuffer, outside any guard, and would 500 the whole card). Plain
+  // centre crop, not the expensive 'attention' saliency crop.
+  let photoBuf: Buffer | null = null;
   const photoFull = input.photoPath ? path.join(input.uploadsDir, input.photoPath) : null;
-  const hasPhoto = !!photoFull && fs.existsSync(photoFull);
-  if (hasPhoto) {
+  if (photoFull && fs.existsSync(photoFull)) {
     try {
-      base = sharp(photoFull!).resize(W, H, { fit: 'cover', position: 'attention' });
+      photoBuf = await sharp(photoFull, { failOn: 'error', limitInputPixels: 50_000_000 })
+        .resize(W, H, { fit: 'cover', position: 'centre' })
+        .toBuffer();
     } catch {
-      base = sharp({ create: { width: W, height: H, channels: 4, background: { r: 6, g: 10, b: 20, alpha: 1 } } });
+      photoBuf = null;
     }
-  } else {
-    base = sharp({ create: { width: W, height: H, channels: 4, background: { r: 6, g: 10, b: 20, alpha: 1 } } });
   }
+  const hasPhoto = !!photoBuf;
+  const base = hasPhoto ? sharp(photoBuf!) : darkBg();
 
   // Club logo (top-left brand lockup). Bounded to a small box; composited on
   // TOP of the scrim so it stays legible over any photo. Skipped on any error.
@@ -86,9 +96,13 @@ export async function renderAircraftOgCard(input: OgCardInput): Promise<Buffer> 
   }
   const nameX = 64 + (logoW ? logoW + 18 : 0);
 
+  // Fixed-size <text> doesn't wrap or shrink; bound every field to what fits
+  // its column so a long callsign/name/description can't run off the card.
+  const callsign = truncate(input.displayCallsign, 18);
+  const clubName = truncate(input.clubName.toUpperCase(), 30);
   // Type/nickname already show in the subtitle, so the blurb line is the
   // human description or tagline only (blank when there's neither).
-  const blurb = truncate(input.description || input.tagline || '', 96);
+  const blurb = truncate(input.description || input.tagline || '', 72);
   const sub = truncate(
     [input.registration, input.nickname && input.nickname !== input.displayCallsign ? input.nickname : input.typeName]
       .filter(Boolean)
@@ -123,8 +137,8 @@ export async function renderAircraftOgCard(input: OgCardInput): Promise<Buffer> 
     ${hasPhoto ? '' : `<rect width="${W}" height="${H}" fill="url(#glow)"/>`}
     <rect width="${W}" height="${H}" fill="url(#scrim)"/>
     <rect x="0" y="0" width="10" height="${H}" fill="${accent}"/>
-    <text x="${nameX}" y="82" font-family="${FONT}" font-size="24" font-weight="700" letter-spacing="4" fill="#c3ccdf">${xml(input.clubName.toUpperCase())}</text>
-    <text x="64" y="404" font-family="${FONT}" font-size="92" font-weight="800" fill="#ffffff">${xml(input.displayCallsign)}</text>
+    <text x="${nameX}" y="82" font-family="${FONT}" font-size="24" font-weight="700" letter-spacing="4" fill="#c3ccdf">${xml(clubName)}</text>
+    <text x="64" y="404" font-family="${FONT}" font-size="92" font-weight="800" fill="#ffffff">${xml(callsign)}</text>
     <text x="66" y="446" font-family="${FONT}" font-size="30" font-weight="600" letter-spacing="2" fill="#aeb9d2">${xml(sub)}</text>
     ${blurb ? `<text x="66" y="490" font-family="${FONT}" font-size="27" font-weight="500" fill="#dbe2f1">${xml(blurb)}</text>` : ''}
     <rect x="64" y="512" width="${W - 128}" height="1.5" fill="rgba(255,255,255,0.14)"/>

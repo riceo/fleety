@@ -88,8 +88,11 @@ export function LivePage() {
         await navigator.share({ title: `${label} — ${config?.siteName ?? 'Fleety'}`, url });
         return;
       }
-    } catch {
-      /* user dismissed the share sheet */
+    } catch (err) {
+      // Cancelling the OS share sheet throws AbortError — that's a deliberate
+      // "no", so stop here rather than silently copying and flashing success.
+      if (err instanceof Error && err.name === 'AbortError') return;
+      // Any other failure (share unsupported at runtime): fall through to copy.
     }
     try {
       await navigator.clipboard.writeText(url);

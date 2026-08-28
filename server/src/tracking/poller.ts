@@ -83,10 +83,11 @@ export class Poller {
     // Guests past their track-until date drop out automatically (but keep
     // their history; admins can re-enable).
     this.db
-      // Auto-expire fires ONCE: clear track_until as we disable, so a later
-      // admin re-enable sticks instead of being flipped straight back off.
+      // Auto-expire a lapsed guest. The date is kept (so the admin can see why
+      // it went dark); the enable toggle clears a past date on re-enable, so
+      // this won't re-fire against an aircraft the admin turns back on.
       .prepare(
-        "UPDATE aircraft SET enabled = 0, track_until = NULL, updated_at = ? WHERE track_until IS NOT NULL AND track_until < date('now') AND enabled = 1"
+        "UPDATE aircraft SET enabled = 0, updated_at = ? WHERE track_until IS NOT NULL AND track_until < date('now') AND enabled = 1"
       )
       .run(Date.now());
     return this.db
@@ -245,7 +246,11 @@ export class Poller {
     for (const h of candidates) this.lastRescueProbe.set(h, now);
     try {
       const states = await this.rescue.provider.fetchStates(candidates);
-      return this.applyBatch(states, byHex);
+      const active = this.applyBatch(states, byHex);
+      // A partial failure (e.g. a 429 on one hex) still keeps the salvaged fix,
+      // but backs the paid provider off so we don't keep metering into an error.
+      if (states.partial) this.rescueCooldownUntil = Date.now() + FAILOVER_COOLDOWN_MS;
+      return active;
     } catch (err) {
       this.rescueCooldownUntil = Date.now() + FAILOVER_COOLDOWN_MS;
       if (Date.now() - this.lastRescueErrLogAt > 5 * 60_000) {

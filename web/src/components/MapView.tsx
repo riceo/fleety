@@ -529,7 +529,13 @@ export const MapView = forwardRef<MapViewHandle, Props>(function MapView(
         dLon = Math.max(dLon, Math.abs(lon - cx));
         dLat = Math.max(dLat, Math.abs(lat - cy));
       };
-      for (const a of fleetRef.current) if (a.pos && now - a.pos.ts < MAP_MAX_AGE_MS) consider(a.pos.lon, a.pos.lat);
+      // Only genuinely-airborne aircraft (plus the focus and the bases) shape
+      // the frame — a day-old parked position or a stale garbage fix must not
+      // blow the zoom out to a continent. A real far-flying jet still counts.
+      for (const a of fleetRef.current) {
+        if (a.status === 'airborne' && a.pos && now - a.pos.ts < MAP_MAX_AGE_MS) consider(a.pos.lon, a.pos.lat);
+      }
+      consider(cx, cy); // the focus itself is always in-frame
       for (const base of basesRef.current) consider(base.lon, base.lat);
       const b = new maplibregl.LngLatBounds([cx - dLon, cy - dLat], [cx + dLon, cy + dLat]);
       map.fitBounds(b, { padding: 60, maxZoom: 11, duration: 1100 });

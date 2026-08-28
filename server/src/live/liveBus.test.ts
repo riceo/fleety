@@ -114,6 +114,27 @@ describe('LiveBus awake status', () => {
     expect(bus.snapshotPayload(1, 'restricted')).toBe('{"aircraft":[]}');
   });
 
+  it('a flight change mid-flush window does not carry the old flight point into the new trail delta', () => {
+    const bus = new LiveBus();
+    bus.syncAircraftList(1, [row(1)]);
+    const at = (lon: number, lat: number, flight: number | null) =>
+      bus.update(1, 1, { ...pos(now), lon, lat }, flight);
+    at(0.5, 51.35, 5);
+    bus.flush();
+    // A connected client watches the deltas.
+    const writes: string[] = [];
+    bus.addClient(1, { write: (s: string) => writes.push(s), end: () => {} } as never, 'member', true);
+    // One flush window: a stale fix for flight 5, then a fresh fix the detector
+    // classifies as a NEW flight 6.
+    at(0.6, 51.4, 5); // point A (old flight)
+    at(1.2, 51.9, 6); // flight change -> trail reset; point B (new flight)
+    bus.flush();
+    const delta = JSON.parse(writes.filter((w) => w.includes('event: delta')).pop()!.match(/data: (.*)\n\n/s)![1]);
+    const ac = delta.aircraft.find((a: { id: number }) => a.id === 1);
+    expect(ac.trailReset).toBe(true);
+    expect(ac.trailAppend).toEqual([[1.2, 51.9]]); // only the new flight's point, not A
+  });
+
   it('roster removals and members-flips produce removal deltas per audience', () => {
     const bus = new LiveBus();
     bus.syncAircraftList(1, [row(1), row(2)]);

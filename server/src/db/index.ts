@@ -37,11 +37,18 @@ export function closeDb(): void {
 }
 
 export function dbFileSizeBytes(): number {
-  try {
-    return fs.statSync(dbPath()).size;
-  } catch {
-    return 0;
+  // Include the WAL/SHM sidecars — in WAL mode the main file lags the real
+  // on-disk footprint, so reporting only it under-counts.
+  const base = dbPath();
+  let total = 0;
+  for (const suffix of ['', '-wal', '-shm']) {
+    try {
+      total += fs.statSync(base + suffix).size;
+    } catch {
+      /* absent */
+    }
   }
+  return total;
 }
 
 export { config };

@@ -174,6 +174,37 @@ describe('security fixes', () => {
     expect(priv.statusCode).toBe(404);
   });
 
+  it('share card: evergreen bare URL vs live minute-bucketed ?s share', async () => {
+    await w.app.inject({
+      method: 'PUT',
+      url: '/api/admin/settings',
+      headers: H('alpha.fleety.live', w.adminACookie),
+      payload: { publicMode: true },
+    });
+    w.db
+      .prepare("INSERT INTO aircraft (club_id, hex, registration, callsign, visibility, enabled, created_at, updated_at) VALUES (?, 'fff444', 'G-EVR', 'INV01', 'public', 1, 0, 0)")
+      .run(w.clubA);
+
+    // Bare URL: durable card, cached hard (24h), no ?s echoed into the image.
+    const ever = await w.app.inject({ method: 'GET', url: '/ac/G-EVR/og.jpg', headers: { host: 'alpha.fleety.live' } });
+    expect(ever.statusCode).toBe(200);
+    expect(ever.headers['cache-control']).toContain('max-age=86400');
+    const everShell = await w.app.inject({ method: 'GET', url: '/ac/G-EVR', headers: { host: 'alpha.fleety.live' } });
+    expect(everShell.body).toContain('/ac/G-EVR/og.jpg" '); // clean image URL, no ?s
+    expect(everShell.body).toContain('Track it live'); // durable tail, no altitude
+
+    // Share-button URL (?s=minute): live card, short cache, bucket echoed on.
+    const live = await w.app.inject({ method: 'GET', url: '/ac/G-EVR/og.jpg?s=29160500', headers: { host: 'alpha.fleety.live' } });
+    expect(live.statusCode).toBe(200);
+    expect(live.headers['cache-control']).toContain('max-age=120');
+    const liveShell = await w.app.inject({ method: 'GET', url: '/ac/G-EVR?s=29160500', headers: { host: 'alpha.fleety.live' } });
+    expect(liveShell.body).toContain('/ac/G-EVR/og.jpg?s=29160500');
+
+    // A junk ?s (non-numeric) is ignored — treated as the evergreen card.
+    const junk = await w.app.inject({ method: 'GET', url: '/ac/G-EVR/og.jpg?s=evil', headers: { host: 'alpha.fleety.live' } });
+    expect(junk.headers['cache-control']).toContain('max-age=86400');
+  });
+
   it('/uploads will not serve a members-only aircraft image to a public viewer, or another club file', async () => {
     // Public club A with one members-only aircraft whose photo is 'p.webp'.
     // Flip public mode through the API so the server's club cache reloads.

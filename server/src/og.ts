@@ -27,9 +27,12 @@ const truncate = (s: string, n: number): string => (s.length > n ? `${s.slice(0,
 
 const safeAccent = (a: string): string => (/^#[0-9a-fA-F]{6}$/.test(a) ? a : '#e32636');
 
-// One-line status/metrics strip: live numbers when airborne, else a state word.
-function statusChips(live: OgCardInput['live']): { label: string; value: string }[] {
-  if (!live) return [{ label: 'STATUS', value: 'NO RECENT CONTACT' }];
+// Bottom strip. With `live` (a minute-bucketed share) it shows the current
+// numbers; without it (the evergreen bare-URL card) it shows a durable
+// call-to-action, so a card cached by a scraper for days never goes stale.
+function bottomChips(input: OgCardInput): { label: string; value: string }[] {
+  const live = input.live;
+  if (!live) return [{ label: 'LIVE TRACKING', value: `Follow on the ${input.clubName} board` }];
   if (live.status === 'airborne') {
     const chips = [{ label: 'STATUS', value: 'AIRBORNE' }];
     if (live.altBaro != null) chips.push({ label: 'ALT', value: `${Math.round(live.altBaro).toLocaleString()} ft` });
@@ -92,8 +95,8 @@ export async function renderAircraftOgCard(input: OgCardInput): Promise<Buffer> 
       .join('  ·  '),
     64
   );
-  const chips = statusChips(input.live);
-  const chipW = 340;
+  const chips = bottomChips(input);
+  const chipW = input.live ? 340 : 640;
   const chipsSvg = chips
     .slice(0, 3)
     .map((c, i) => {

@@ -1464,6 +1464,15 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     return { status: a.status, altBaro: a.pos?.altBaro ?? null, gs: a.pos?.gs ?? null };
   };
 
+  // The Share button appends ?s=<minute bucket> so each intentional share
+  // captures the live moment while staying Cloudflare-cacheable within the
+  // minute. A bare URL (no valid bucket) is the evergreen preview. Restricting
+  // to digits keeps the cache key from being poisoned with arbitrary values.
+  const shareBucket = (req: FastifyRequest): string | null => {
+    const s = (req.query as { s?: string }).s;
+    return typeof s === 'string' && /^\d{1,12}$/.test(s) ? s : null;
+  };
+
   // Server-rendered JPEG share card for one aircraft (WhatsApp won't preview
   // our webp photos, and this also bakes in the live details). Public only.
   // Rendering is off the event loop (sharp's threadpool) and the response is
@@ -1473,14 +1482,17 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     const reg = String((req.params as { reg: string }).reg ?? '').trim();
     const ac = publicAircraftFor(club, reg);
     if (!club || !ac) return reply.code(404).send({ error: 'not_found' });
-    // Serve a recently-rendered card from memory: a shared link is scraped in
-    // bursts (WhatsApp/Slack/Twitter each hit it, plus retries), so the same
-    // card is asked for many times in seconds. One render per aircraft per
-    // OG_CACHE_MS covers that; the buffer is tiny (~30-120KB).
-    const key = `${club.id}:${ac.id}`;
+    const bucket = shareBucket(req); // null => evergreen; else a live snapshot
+    // In-process cache absorbs the scrape burst (WhatsApp/Slack/Twitter each
+    // hit it, plus retries). Keyed by bucket so a new minute renders fresh and
+    // the evergreen card is its own entry. Evergreen is cached hard at the edge
+    // (it only changes with the photo/description); a bucketed live card gets a
+    // short edge TTL that still covers the minute it's valid for.
+    const maxAge = bucket ? 120 : 86400;
+    const key = `${club.id}:${ac.id}:${bucket ?? 'ever'}`;
     const hit = ogCache.get(key);
     if (hit && Date.now() - hit.at < OG_CACHE_MS) {
-      return reply.type('image/jpeg').header('Cache-Control', 'public, max-age=300').send(hit.buf);
+      return reply.type('image/jpeg').header('Cache-Control', `public, max-age=${maxAge}`).send(hit.buf);
     }
     const spoken = displayCallsignFor(ac.callsign || '', clubs.rules(club));
     const card = await renderAircraftOgCard({
@@ -1495,14 +1507,15 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
       nickname: ac.nickname,
       description: ac.description,
       tagline: ac.tagline,
-      live: liveMetrics(club.id, ac.id),
+      // Live numbers only for a bucketed share; the bare URL stays evergreen.
+      live: bucket ? liveMetrics(club.id, ac.id) : null,
     });
     ogCache.set(key, { at: Date.now(), buf: card });
     if (ogCache.size > 200) {
       // Bounded: drop the oldest entries so the cache can't grow unbounded.
       for (const k of [...ogCache.keys()].slice(0, ogCache.size - 200)) ogCache.delete(k);
     }
-    return reply.type('image/jpeg').header('Cache-Control', 'public, max-age=300').send(card);
+    return reply.type('image/jpeg').header('Cache-Control', `public, max-age=${maxAge}`).send(card);
   });
 
   // Deep link to one aircraft: /ac/G-PSZB (or its callsign).
@@ -1517,23 +1530,34 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     if (club && ac) {
       const spoken = displayCallsignFor(ac.callsign || '', clubs.rules(club));
       const label = spoken || ac.registration;
-      const m = liveMetrics(club.id, ac.id);
-      const liveLine =
-        m?.status === 'airborne'
-          ? `Airborne now${m.altBaro != null ? ` at ${Math.round(m.altBaro).toLocaleString()} ft` : ''}${m.gs != null ? `, ${Math.round(m.gs)} kt` : ''}.`
-          : m?.status === 'awake'
-            ? 'Transponder live.'
-            : m?.status === 'ground'
-              ? 'On the ground.'
-              : '';
-      const blurb = ac.description || ac.tagline || `${ac.nickname || ac.type_name}`;
+      const bucket = shareBucket(req); // Share-button link => live snapshot text
+      const typeLine = `${ac.type_name}${ac.nickname ? ` “${ac.nickname}”` : ''}.`;
+      const rawBlurb = (ac.description || ac.tagline || '').trim();
+      // Give the blurb terminal punctuation so it reads as a sentence when the
+      // durable/live tail is appended after it.
+      const blurb = rawBlurb && !/[.!?…]$/.test(rawBlurb) ? `${rawBlurb}.` : rawBlurb;
+      let tail: string;
+      if (bucket) {
+        const m = liveMetrics(club.id, ac.id);
+        tail =
+          m?.status === 'airborne'
+            ? `Airborne now${m.altBaro != null ? ` at ${Math.round(m.altBaro).toLocaleString()} ft` : ''}${m.gs != null ? `, ${Math.round(m.gs)} kt` : ''}.`
+            : m?.status === 'awake'
+              ? 'Transponder live now.'
+              : m?.status === 'ground'
+                ? 'On the ground now.'
+                : '';
+      } else {
+        // Evergreen: durable invitation, no volatile numbers that would be
+        // wrong for the days a scraper caches this card.
+        tail = `Track it live on the ${club.name} ops board.`;
+      }
       meta.title = `${label} · ${ac.registration} — live on ${club.name}`;
-      meta.description = [`${ac.type_name}${ac.nickname ? ` “${ac.nickname}”` : ''}.`, liveLine, blurb]
-        .filter(Boolean)
-        .join(' ')
-        .trim();
+      meta.description = [typeLine, blurb, tail].filter(Boolean).join(' ').trim();
+      // Canonical/og:url stay the clean URL (SEO dedupes to the evergreen page);
+      // only the image carries the bucket so the picture refreshes per share.
       meta.url = `${baseUrl(req)}/ac/${encodeURIComponent(ac.registration)}`;
-      meta.image = `${baseUrl(req)}/ac/${encodeURIComponent(ac.registration)}/og.jpg`;
+      meta.image = `${meta.url}/og.jpg${bucket ? `?s=${bucket}` : ''}`;
       meta.imageType = 'image/jpeg';
     }
     return renderShell(reply, meta);

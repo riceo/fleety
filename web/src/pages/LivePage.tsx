@@ -77,7 +77,12 @@ export function LivePage() {
   };
 
   const share = async (registration: string, label: string) => {
-    const url = `${window.location.origin}/ac/${encodeURIComponent(registration)}`;
+    // ?s = current minute bucket. A deliberate share captures the aircraft's
+    // live state at share time, while staying identical (so Cloudflare-cached)
+    // for everyone sharing within the same minute. The address bar keeps the
+    // clean evergreen URL — only this explicit share carries the bucket.
+    const bucket = Math.floor(Date.now() / 60_000);
+    const url = `${window.location.origin}/ac/${encodeURIComponent(registration)}?s=${bucket}`;
     try {
       if (navigator.share) {
         await navigator.share({ title: `${label} — ${config?.siteName ?? 'Fleety'}`, url });

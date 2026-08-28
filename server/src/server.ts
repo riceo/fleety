@@ -1486,6 +1486,7 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     const card = await renderAircraftOgCard({
       uploadsDir: uploadsDir(),
       photoPath: ac.photo_path,
+      logoPath: club.logo_path,
       accent: club.accent,
       clubName: club.name,
       displayCallsign: spoken || ac.registration,

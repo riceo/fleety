@@ -129,6 +129,28 @@ export function KioskPage() {
     return () => clearInterval(t);
   }, [ready, live.lastEventAt]);
 
+  // Auto-refresh after a deploy: the built entry script is content-hashed, so
+  // when the server starts serving a different filename than the one this kiosk
+  // is running, a new version has shipped — reload to pick it up. No manual
+  // trip to the TV required.
+  useEffect(() => {
+    const currentSrc = document.querySelector('script[type="module"][src]')?.getAttribute('src') ?? null;
+    if (!currentSrc) return; // dev server (unhashed entry) — nothing to compare
+    const check = async () => {
+      try {
+        const html = await (await fetch('/', { cache: 'no-store' })).text();
+        const latest = html.match(/<script[^>]*type="module"[^>]*src="([^"]+)"/i)?.[1];
+        // Only reload on a confident, different match (ignore fetch errors and
+        // the brief window mid-deploy where the server may be unreachable).
+        if (latest && latest !== currentSrc) window.location.reload();
+      } catch {
+        /* deploy in progress or offline — retry on the next tick */
+      }
+    };
+    const t = setInterval(() => void check(), 90_000);
+    return () => clearInterval(t);
+  }, []);
+
   const airborne = live.fleet.filter((a) => a.status === 'airborne');
   const rank = { awake: 0, ground: 1, offline: 2 } as Record<string, number>;
   const others = [...live.fleet.filter((a) => a.status !== 'airborne')].sort(
@@ -166,7 +188,9 @@ export function KioskPage() {
   const viewMode = config?.kioskViewMode ?? 'target';
   useEffect(() => {
     if (viewMode === 'overview') {
-      mapRef.current?.fitOverview();
+      // Centre on the cycled aircraft but stay zoomed out to hold the context.
+      if (focused) mapRef.current?.fitOverviewOn(focused.id);
+      else mapRef.current?.fitOverview();
       return;
     }
     if (focused) {
@@ -180,9 +204,13 @@ export function KioskPage() {
   // Overview refit: aircraft drift out of frame between focus changes.
   useEffect(() => {
     if (viewMode !== 'overview') return;
-    const t = setInterval(() => mapRef.current?.fitOverview(), 20_000);
+    const t = setInterval(() => {
+      if (focused) mapRef.current?.fitOverviewOn(focused.id);
+      else mapRef.current?.fitOverview();
+    }, 20_000);
     return () => clearInterval(t);
-  }, [viewMode]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewMode, focused?.id]);
 
   // TVs run for weeks — pick up settings changes without a manual reload.
   useEffect(() => {

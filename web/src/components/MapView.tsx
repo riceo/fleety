@@ -147,6 +147,7 @@ export interface MapViewHandle {
   flyToAircraft: (id: number) => void;
   fitFleet: () => void;
   fitOverview: () => void;
+  fitOverviewOn: (id: number) => void;
   getMap: () => maplibregl.Map | null;
 }
 
@@ -507,6 +508,32 @@ export const MapView = forwardRef<MapViewHandle, Props>(function MapView(
     // Kiosk overview: frame every fresh aircraft AND the club's base
     // airfields, rather than chasing one target.
     fitOverview,
+    // Overview while cycling: keep the focused aircraft dead-centre, zooming
+    // out as far as needed to also hold every other aircraft and the bases —
+    // a symmetric box around the focus (clarity is traded for context).
+    fitOverviewOn: (id: number) => {
+      const map = mapRef.current;
+      if (!map) return;
+      const focus = fleetRef.current.find((a) => a.id === id);
+      if (!focus?.pos) {
+        fitOverview();
+        return;
+      }
+      const cx = focus.pos.lon;
+      const cy = focus.pos.lat;
+      const now = Date.now();
+      // Minimum half-span so a lone aircraft near its base isn't over-zoomed.
+      let dLon = 0.05;
+      let dLat = 0.05;
+      const consider = (lon: number, lat: number) => {
+        dLon = Math.max(dLon, Math.abs(lon - cx));
+        dLat = Math.max(dLat, Math.abs(lat - cy));
+      };
+      for (const a of fleetRef.current) if (a.pos && now - a.pos.ts < MAP_MAX_AGE_MS) consider(a.pos.lon, a.pos.lat);
+      for (const base of basesRef.current) consider(base.lon, base.lat);
+      const b = new maplibregl.LngLatBounds([cx - dLon, cy - dLat], [cx + dLon, cy + dLat]);
+      map.fitBounds(b, { padding: 60, maxZoom: 11, duration: 1100 });
+    },
     getMap: () => mapRef.current,
   }));
 

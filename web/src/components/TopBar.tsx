@@ -51,7 +51,7 @@ export function TopBar() {
         {isPlatformAdmin(me) && <NavLink to="/platform">Platform</NavLink>}
       </nav>
       <div className="topbar-right">
-        {(isAdmin(me) || me?.user?.role === 'member') && (
+        {(isAdmin(me) || me?.user?.role === 'member' || config?.publicMode) && (
           <button
             className="btn btn-ghost kiosk-launch"
             title="Full-screen board for a big display"

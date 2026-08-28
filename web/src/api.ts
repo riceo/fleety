@@ -67,6 +67,7 @@ export interface AppConfig {
   publicMode?: boolean;
   logoUrl?: string | null;
   callsignRules?: CallsignRule[];
+  kioskViewMode?: 'target' | 'overview';
 }
 
 export interface Me {

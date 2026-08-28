@@ -14,6 +14,7 @@ export interface ClubRow {
   tile_style_url: string;
   public_mode: number;
   kiosk_token: string;
+  kiosk_prefs: string;
   callsign_rules: string; // JSON [{prefix, spoken}]
   created_at: number;
 }

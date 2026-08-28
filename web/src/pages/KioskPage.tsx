@@ -161,14 +161,35 @@ export function KioskPage() {
       : null;
   const focused = eventFocused ?? (airborne.length > 0 ? airborne[focusIdx % airborne.length] : null);
 
+  // Admin-chosen camera behaviour: chase the focused target, or hold an
+  // overview that keeps every aircraft and the home bases in frame.
+  const viewMode = config?.kioskViewMode ?? 'target';
   useEffect(() => {
+    if (viewMode === 'overview') {
+      mapRef.current?.fitOverview();
+      return;
+    }
     if (focused) {
       mapRef.current?.flyToAircraft(focused.id);
     } else {
       mapRef.current?.fitFleet();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focused?.id, live.fleet.length === 0]);
+  }, [focused?.id, viewMode, live.fleet.length === 0]);
+
+  // Overview refit: aircraft drift out of frame between focus changes.
+  useEffect(() => {
+    if (viewMode !== 'overview') return;
+    const t = setInterval(() => mapRef.current?.fitOverview(), 20_000);
+    return () => clearInterval(t);
+  }, [viewMode]);
+
+  // TVs run for weeks — pick up settings changes without a manual reload.
+  useEffect(() => {
+    if (!ready) return;
+    const t = setInterval(() => void refresh(), 5 * 60_000);
+    return () => clearInterval(t);
+  }, [ready, refresh]);
 
   if (loading || !config) return <div className="kiosk-splash mono-label">ACQUIRING…</div>;
   if (authFailed)
@@ -229,7 +250,7 @@ export function KioskPage() {
           <div className="kiosk-map">
             {/* followId keeps the camera glued to the focused aircraft (with
                 dead-reckoned easing), not just a one-shot fly-to. */}
-            <MapView ref={mapRef} config={config} fleet={live.fleet} followId={focused?.id ?? null} kiosk />
+            <MapView ref={mapRef} config={config} fleet={live.fleet} followId={viewMode === 'target' ? (focused?.id ?? null) : null} kiosk />
             <div className="radar-sweep" aria-hidden />
           </div>
         ) : (

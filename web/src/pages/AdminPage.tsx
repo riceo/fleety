@@ -1115,6 +1115,7 @@ interface ClubSettings {
   tile_style_url: string;
   public_mode: number;
   kiosk_token: string;
+  kiosk_prefs: string;
   callsign_rules: string;
 }
 
@@ -1153,6 +1154,13 @@ export function SettingsAdmin() {
   };
 
   const setKey = (k: string, v: unknown) => setForm((p) => ({ ...p, [k]: v }));
+  const kioskPrefs: { viewMode?: string } = (() => {
+    try {
+      return JSON.parse(club?.kiosk_prefs || '{}') as { viewMode?: string };
+    } catch {
+      return {};
+    }
+  })();
   const publicOn = form.publicMode !== undefined ? !!form.publicMode : club?.public_mode === 1;
   const kioskUrl = club ? `${window.location.origin}/kiosk?token=${club.kiosk_token}` : '';
 
@@ -1184,6 +1192,22 @@ export function SettingsAdmin() {
             Rotate link
           </button>
         </div>
+        <div className="form-row" style={{ marginTop: '0.75rem' }}>
+          <label style={{ flex: 1 }}>
+            Camera when cycling between live targets
+            <select
+              value={String(form.kioskViewMode ?? kioskPrefs.viewMode ?? 'target')}
+              onChange={(e) => setKey('kioskViewMode', e.target.value)}
+            >
+              <option value="target">Zoom in to the target aircraft</option>
+              <option value="overview">Overview — keep all aircraft and home bases in view</option>
+            </select>
+          </label>
+        </div>
+        <p className="muted small">
+          Overview holds a frame containing every tracked aircraft and your base airfields; the board cards
+          still cycle through whatever is airborne. Running kiosks pick up changes within a few minutes.
+        </p>
       </section>
 
       <section className="setting-block">

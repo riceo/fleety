@@ -22,7 +22,7 @@ interface ClubAirfield {
 // Airfield layers: the full European dataset fades in with zoom; the club's
 // own airfields are always-on branded markers, with Rochester/Lydd (bases)
 // most prominent.
-function addAirfieldLayers(map: maplibregl.Map, accent: string): void {
+function addAirfieldLayers(map: maplibregl.Map, accent: string, onBases?: (bases: ClubAirfield[]) => void): void {
   map.addImage('af-base', renderRoundel(17, accent, '#ffffff', '#ffffff'), { pixelRatio: 2 });
   map.addImage('af-club', renderRoundel(12, CLUB_BLUE, '#ffffff', '#ffffff'), { pixelRatio: 2 });
 
@@ -138,6 +138,7 @@ function addAirfieldLayers(map: maplibregl.Map, accent: string): void {
           properties: { code: a.code, name: a.name, isBase: a.is_base },
         })),
       });
+      onBases?.(res.airfields.filter((a) => a.is_base === 1));
     })
     .catch(() => {});
 }
@@ -145,6 +146,7 @@ function addAirfieldLayers(map: maplibregl.Map, accent: string): void {
 export interface MapViewHandle {
   flyToAircraft: (id: number) => void;
   fitFleet: () => void;
+  fitOverview: () => void;
   getMap: () => maplibregl.Map | null;
 }
 
@@ -191,6 +193,31 @@ export const MapView = forwardRef<MapViewHandle, Props>(function MapView(
   const readyRef = useRef(false);
   const fleetRef = useRef(fleet);
   fleetRef.current = fleet;
+  const basesRef = useRef<ClubAirfield[]>([]);
+  // An overview fit requested before the airfields fetch resolves would frame
+  // aircraft only — remember and re-fit once the bases arrive.
+  const overviewPendingRef = useRef(false);
+
+  const fitOverview = () => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (basesRef.current.length === 0) overviewPendingRef.current = true;
+    const now = Date.now();
+    const b = new maplibregl.LngLatBounds();
+    let any = false;
+    for (const a of fleetRef.current) {
+      if (a.pos && now - a.pos.ts < MAP_MAX_AGE_MS) {
+        b.extend([a.pos.lon, a.pos.lat]);
+        any = true;
+      }
+    }
+    for (const base of basesRef.current) {
+      b.extend([base.lon, base.lat]);
+      any = true;
+    }
+    if (!any) b.extend([centerLon, centerLat]);
+    map.fitBounds(b, { padding: 90, maxZoom: 11, duration: 1100 });
+  };
   const selectedRef = useRef(selectedId);
   selectedRef.current = selectedId ?? null;
   const followRef = useRef(followId);
@@ -239,7 +266,13 @@ export const MapView = forwardRef<MapViewHandle, Props>(function MapView(
     }, 1000);
 
     map.on('load', () => {
-      addAirfieldLayers(map, config.accent ?? '#e32636');
+      addAirfieldLayers(map, config.accent ?? '#e32636', (bases) => {
+        basesRef.current = bases;
+        if (overviewPendingRef.current) {
+          overviewPendingRef.current = false;
+          fitOverview();
+        }
+      });
       map.addSource('trails', {
         type: 'geojson',
         data: { type: 'FeatureCollection', features: [] },
@@ -466,6 +499,9 @@ export const MapView = forwardRef<MapViewHandle, Props>(function MapView(
       b.extend([centerLon, centerLat]);
       map.fitBounds(b, { padding: 80, maxZoom: 11, duration: 900 });
     },
+    // Kiosk overview: frame every fresh aircraft AND the club's base
+    // airfields, rather than chasing one target.
+    fitOverview,
     getMap: () => mapRef.current,
   }));
 

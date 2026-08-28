@@ -290,6 +290,14 @@ CREATE TABLE waitlist (
 );
 `,
   },
+  {
+    // Per-club kiosk preferences as JSON — room for future kiosk settings
+    // without a migration each ({"viewMode": "target" | "overview"}).
+    id: 8,
+    sql: `
+ALTER TABLE clubs ADD COLUMN kiosk_prefs TEXT NOT NULL DEFAULT '{}';
+`,
+  },
 ];
 
 export function migrate(db: Database): void {

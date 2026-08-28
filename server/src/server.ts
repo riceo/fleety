@@ -139,6 +139,14 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     return false;
   };
 
+  const kioskPrefs = (club: ClubRow): { viewMode?: string } => {
+    try {
+      return JSON.parse(club.kiosk_prefs || '{}') as { viewMode?: string };
+    } catch {
+      return {};
+    }
+  };
+
   // Ownership guard: the aircraft must belong to the request's club.
   const clubAircraft = (club: ClubRow, id: number) =>
     db.prepare('SELECT * FROM aircraft WHERE id = ? AND club_id = ? AND deleted_at IS NULL').get(id, club.id) as
@@ -295,6 +303,7 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
       publicMode: club.public_mode === 1,
       logoUrl: club.logo_path ? `/uploads/${club.logo_path}` : null,
       callsignRules: clubs.rules(club),
+      kioskViewMode: kioskPrefs(club).viewMode === 'overview' ? 'overview' : 'target',
     };
   });
 
@@ -760,6 +769,12 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
       map_zoom: Number(b.mapZoom) || club.map_zoom,
       tile_style_url: String(b.tileStyleUrl ?? club.tile_style_url),
       public_mode: b.publicMode === undefined ? club.public_mode : b.publicMode ? 1 : 0,
+      kiosk_prefs: (() => {
+        if (b.kioskViewMode === undefined) return club.kiosk_prefs;
+        const prefs = kioskPrefs(club);
+        prefs.viewMode = b.kioskViewMode === 'overview' ? 'overview' : 'target';
+        return JSON.stringify(prefs);
+      })(),
       callsign_rules: (() => {
         if (b.callsignRules === undefined) return club.callsign_rules;
         try {
@@ -776,7 +791,8 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     };
     db.prepare(
       `UPDATE clubs SET name=@name, subheading=@subheading, theme=@theme, accent=@accent, map_center=@map_center,
-       map_zoom=@map_zoom, tile_style_url=@tile_style_url, public_mode=@public_mode, callsign_rules=@callsign_rules
+       map_zoom=@map_zoom, tile_style_url=@tile_style_url, public_mode=@public_mode, callsign_rules=@callsign_rules,
+       kiosk_prefs=@kiosk_prefs
        WHERE id=@id`
     ).run(next);
     clubs.reload();

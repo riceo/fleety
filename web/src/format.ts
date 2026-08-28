@@ -1,4 +1,14 @@
-const TZ = 'Europe/London';
+// Per-club display timezone, set from /api/config at load. Defaults to UK.
+let TZ = 'Europe/London';
+export function setTimezone(tz: string | undefined): void {
+  TZ = tz || 'Europe/London';
+}
+
+// Escape regex metacharacters so a club-configured prefix can't throw (which,
+// with no ErrorBoundary, would white-screen the whole board).
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 export const fmtAlt = (ft: number | null): string => (ft === null ? '—' : `${Math.round(ft).toLocaleString()} ft`);
 export const fmtGs = (kt: number | null): string => (kt === null ? '—' : `${Math.round(kt)} kt`);
@@ -27,7 +37,7 @@ export function displayCallsign(cs: string | null | undefined): string {
   if (!cs) return '';
   const clean = cs.trim().toUpperCase();
   for (const r of activeRules) {
-    const m = new RegExp(`^${r.prefix.toUpperCase()}\\s?(\\d+)$`).exec(clean);
+    const m = new RegExp(`^${escapeRegex(r.prefix.toUpperCase())}\\s?(\\d+)$`).exec(clean);
     if (m) return `${r.spoken.toUpperCase()} ${m[1]}`;
   }
   return clean;

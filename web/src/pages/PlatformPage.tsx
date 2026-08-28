@@ -298,11 +298,68 @@ export function PlatformPage() {
           </tbody>
         </table>
 
+        <PlatformStatus />
+
         <WaitlistAdmin />
 
         <RescuePanel />
       </main>
     </div>
+  );
+}
+
+// ---------- shared-feed status (platform-wide poll log + DB size) ----------
+
+interface PlatformStatusRes {
+  poller: { lastPollAt: number; ok: boolean; error: string | null };
+  recentPolls: { ts: number; provider: string; ok: number; error: string | null; aircraft_returned: number; duration_ms: number }[];
+  dbSizeBytes: number;
+}
+
+function PlatformStatus() {
+  const [data, setData] = useState<PlatformStatusRes | null>(null);
+  const load = useCallback(() => {
+    api<PlatformStatusRes>('/api/platform/status')
+      .then(setData)
+      .catch(() => {});
+  }, []);
+  useEffect(() => {
+    load();
+    const t = setInterval(load, 10_000);
+    return () => clearInterval(t);
+  }, [load]);
+  if (!data) return null;
+  return (
+    <>
+      <h1 style={{ marginTop: '2rem' }}>Platform — data feed</h1>
+      <p className="muted small">
+        The poller is shared across every club: {data.poller.ok ? 'healthy' : 'failing'}, last poll{' '}
+        {data.poller.lastPollAt ? fmtAgo(data.poller.lastPollAt) : 'never'}
+        {data.poller.error ? ` — ${data.poller.error}` : ''}. Database {(data.dbSizeBytes / 1024 / 1024).toFixed(1)} MB.
+      </p>
+      <table className="table">
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Provider</th>
+            <th>Result</th>
+            <th>Aircraft</th>
+            <th>Duration</th>
+          </tr>
+        </thead>
+        <tbody>
+          {data.recentPolls.map((p, i) => (
+            <tr key={i}>
+              <td className="muted">{fmtAgo(p.ts)}</td>
+              <td>{p.provider}</td>
+              <td>{p.ok ? 'ok' : `error: ${p.error}`}</td>
+              <td>{p.aircraft_returned}</td>
+              <td>{p.duration_ms} ms</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </>
   );
 }
 

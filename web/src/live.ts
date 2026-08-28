@@ -23,6 +23,7 @@ export function useLiveFleet(enabled: boolean): LiveState {
   const [connected, setConnected] = useState(false);
   const [denied, setDenied] = useState(false);
   const [tickerEvent, setTickerEvent] = useState<LiveTickerEvent | null>(null);
+  const [, setBeat] = useState(0); // re-render on keepalive so lastEventAt propagates to watchdogs
   const tickerSeq = useRef(0);
   const lastEventAt = useRef(Date.now());
   const byId = useRef(new Map<number, LiveAircraft>());
@@ -36,6 +37,20 @@ export function useLiveFleet(enabled: boolean): LiveState {
       const list = [...byId.current.values()];
       setFleet(list);
     };
+
+    // Any (re)connection means the stream is live — a Last-Event-ID resume
+    // replays deltas with no snapshot, so don't wait for one to clear the flag.
+    es.onopen = () => {
+      setConnected(true);
+      lastEventAt.current = Date.now();
+    };
+
+    // Named keepalive (not a bare SSE comment): proves a quiet feed is alive so
+    // the kiosk watchdog doesn't reload every few minutes overnight.
+    es.addEventListener('ping', () => {
+      lastEventAt.current = Date.now();
+      setBeat((b) => b + 1);
+    });
 
     es.addEventListener('snapshot', (ev) => {
       const data = JSON.parse((ev as MessageEvent).data) as { aircraft: LiveAircraft[] };
@@ -58,10 +73,15 @@ export function useLiveFleet(enabled: boolean): LiveState {
         }
         const { trailAppend, trailReset, ...rest } = d;
         const trail = trailReset ? [] : existing.trail;
-        if (trailAppend) trail.push(trailAppend);
+        if (trailAppend) {
+          // Array of points (current server) or a single pair (older server).
+          if (Array.isArray(trailAppend[0])) for (const pt of trailAppend as [number, number][]) trail.push(pt);
+          else trail.push(trailAppend as [number, number]);
+        }
         byId.current.set(d.id, { ...existing, ...rest, trail });
       }
       lastEventAt.current = Date.now();
+      setConnected(true);
       push();
       if (needResync) {
         // An aircraft we have never seen appeared mid-stream (admin added it):

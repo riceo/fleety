@@ -83,8 +83,10 @@ export class Poller {
     // Guests past their track-until date drop out automatically (but keep
     // their history; admins can re-enable).
     this.db
+      // Auto-expire fires ONCE: clear track_until as we disable, so a later
+      // admin re-enable sticks instead of being flipped straight back off.
       .prepare(
-        "UPDATE aircraft SET enabled = 0, updated_at = ? WHERE track_until IS NOT NULL AND track_until < date('now') AND enabled = 1"
+        "UPDATE aircraft SET enabled = 0, track_until = NULL, updated_at = ? WHERE track_until IS NOT NULL AND track_until < date('now') AND enabled = 1"
       )
       .run(Date.now());
     return this.db
@@ -383,7 +385,12 @@ export class Poller {
         ]);
         const missing = hexes.filter((h) => !freshlyHeard.has(h));
         let rescued = false;
-        const allFresh = new Set(freshlyHeard);
+        // Rescue is gated on fresh POSITIONS only, never presences: an aircraft
+        // heard as a bare Mode-S sighting with no position is exactly the
+        // vanished-in-flight case the paid tier exists to cover.
+        const positionFresh = new Set(
+          primaryStates.positions.filter((p) => (p.seenPos ?? 0) <= HEARD_FRESH_SEC).map((p) => p.hex)
+        );
         if (failover && missing.length > 0 && Date.now() >= this.failoverCooldownUntil) {
           const start = this.failoverCursor % missing.length;
           const window = missing.slice(start, start + HEXES_PER_CALL);
@@ -395,8 +402,7 @@ export class Poller {
             const fo = await failover.fetchStates(window);
             anyActive = this.applyBatch(fo, byHex) || anyActive;
             rescued = fo.positions.length > 0 || fo.presences.length > 0;
-            for (const x of fo.positions) if ((x.seenPos ?? 0) <= HEARD_FRESH_SEC) allFresh.add(x.hex);
-            for (const x of fo.presences) if (x.seen <= HEARD_FRESH_SEC) allFresh.add(x.hex);
+            for (const x of fo.positions) if ((x.seenPos ?? 0) <= HEARD_FRESH_SEC) positionFresh.add(x.hex);
           } catch (foErr) {
             this.failoverCooldownUntil = Date.now() + FAILOVER_COOLDOWN_MS;
             if (Date.now() - this.lastFailoverErrLogAt > 5 * 60_000) {
@@ -406,7 +412,7 @@ export class Poller {
           }
         }
 
-        anyActive = (await this.rescuePass(byHex, allFresh)) || anyActive;
+        anyActive = (await this.rescuePass(byHex, positionFresh)) || anyActive;
 
         this.detector.tick(Date.now());
 

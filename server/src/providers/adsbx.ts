@@ -12,25 +12,36 @@ export class AdsbxProvider implements AdsbProvider {
 
   async fetchStates(hexes: string[]): Promise<ProviderStates> {
     const out: ProviderStates = { positions: [], presences: [] };
+    let lastError: unknown = null;
     for (const hex of hexes) {
-      const res = await fetch(`https://${this.host}/v2/icao/${hex}/`, {
-        headers: {
-          'x-rapidapi-key': config.adsbxApiKey,
-          'x-rapidapi-host': this.host,
-          Accept: 'application/json',
-        },
-        signal: AbortSignal.timeout(12_000),
-      });
-      if (!res.ok) throw new ProviderHttpError(res.status, `adsbexchange responded ${res.status}`);
-      const body = (await res.json()) as { ac?: ReadsbAircraft[] | null };
-      const pollTime = Date.now();
-      for (const ac of body.ac ?? []) {
-        const pos = normalizeReadsb(ac, pollTime, this.name);
-        if (pos) out.positions.push(pos);
-        const pres = normalizePresence(ac, pollTime, this.name);
-        if (pres) out.presences.push(pres);
+      // Each hex is a separately-metered (paid) request, so a failure on one
+      // must not discard data already fetched for earlier hexes in the batch.
+      try {
+        const res = await fetch(`https://${this.host}/v2/icao/${hex}/`, {
+          headers: {
+            'x-rapidapi-key': config.adsbxApiKey,
+            'x-rapidapi-host': this.host,
+            Accept: 'application/json',
+          },
+          signal: AbortSignal.timeout(12_000),
+        });
+        if (!res.ok) throw new ProviderHttpError(res.status, `adsbexchange responded ${res.status}`);
+        const body = (await res.json()) as { ac?: ReadsbAircraft[] | null };
+        const pollTime = Date.now();
+        for (const ac of body.ac ?? []) {
+          const pos = normalizeReadsb(ac, pollTime, this.name);
+          if (pos) out.positions.push(pos);
+          const pres = normalizePresence(ac, pollTime, this.name);
+          if (pres) out.presences.push(pres);
+        }
+      } catch (err) {
+        lastError = err;
       }
     }
+    // Surface an error only when nothing at all came back (so the poller's
+    // cooldown/backoff still engages on a total outage), never when we salvaged
+    // at least one hex's fix.
+    if (lastError && out.positions.length === 0 && out.presences.length === 0) throw lastError;
     return out;
   }
 }

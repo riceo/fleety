@@ -15,6 +15,7 @@ export interface ClubRow {
   public_mode: number;
   kiosk_token: string;
   kiosk_prefs: string;
+  timezone: string;
   callsign_rules: string; // JSON [{prefix, spoken}]
   created_at: number;
 }
@@ -89,10 +90,16 @@ export class Clubs {
   }
 }
 
+// Escape regex metacharacters so an admin-entered prefix like "G-(" is matched
+// literally instead of compiling to (or throwing as) a regex.
+export function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 export function displayCallsignFor(cs: string, rules: CallsignRule[]): string {
   const clean = cs.trim().toUpperCase();
   for (const r of rules) {
-    const m = new RegExp(`^${r.prefix.toUpperCase()}\\s?(\\d+)$`).exec(clean);
+    const m = new RegExp(`^${escapeRegex(r.prefix.toUpperCase())}\\s?(\\d+)$`).exec(clean);
     if (m) return `${r.spoken.toUpperCase()} ${m[1]}`;
   }
   return clean;

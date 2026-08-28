@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
 import { api, type AppConfig, type Me } from './api';
-import { setCallsignRules } from './format';
+import { setCallsignRules, setTimezone } from './format';
 
 // Theme preset + accent are applied as a root attribute and CSS variable so
 // every club renders in its own colours within the same design system.
@@ -38,6 +38,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setMe(meRes);
       setConfig(cfgRes);
       setCallsignRules(cfgRes.callsignRules);
+      setTimezone(cfgRes.timezone);
       applyTheme(cfgRes);
     } catch {
       setMe(null);

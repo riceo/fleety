@@ -36,6 +36,17 @@ export function LoginPage() {
     }
   };
 
+  // Escape hatch: a must-change session left overnight loses the typed current
+  // password on refresh, so let the user sign out and start over.
+  const signOut = async () => {
+    await post('/api/logout', {}).catch(() => {});
+    await refresh();
+    setPassword('');
+    setNext('');
+    setConfirm('');
+    setError('');
+  };
+
   const forgot = async () => {
     if (!email) {
       setError('Enter your email first, then press “Forgot password”.');
@@ -80,11 +91,19 @@ export function LoginPage() {
             <form onSubmit={(e) => void changePassword(e)}>
               <input
                 type="password"
+                placeholder="Current password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoComplete="current-password"
+                autoFocus={!password}
+              />
+              <input
+                type="password"
                 placeholder="New password (min 8 characters)"
                 value={next}
                 onChange={(e) => setNext(e.target.value)}
                 autoComplete="new-password"
-                autoFocus
+                autoFocus={!!password}
               />
               <input
                 type="password"
@@ -96,6 +115,9 @@ export function LoginPage() {
               {error && <p className="form-error">{error}</p>}
               <button className="btn btn-primary" disabled={busy}>
                 {busy ? 'Saving…' : 'Save and continue'}
+              </button>
+              <button type="button" className="btn btn-ghost small" onClick={() => void signOut()}>
+                Sign out
               </button>
             </form>
           </>

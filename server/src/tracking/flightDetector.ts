@@ -79,13 +79,42 @@ export class FlightDetector {
     for (const f of open) {
       const last = this.db
         .prepare('SELECT * FROM positions WHERE aircraft_id = ? ORDER BY ts DESC LIMIT 1')
-        .get(f.aircraft_id) as { ts: number; lat: number; lon: number } | undefined;
+        .get(f.aircraft_id) as
+        | {
+            ts: number;
+            lat: number;
+            lon: number;
+            alt_baro: number | null;
+            alt_geom: number | null;
+            gs: number | null;
+            track: number | null;
+            baro_rate: number | null;
+            geom_rate: number | null;
+            on_ground: number | null;
+          }
+        | undefined;
       this.states.set(f.aircraft_id, {
         clubId: f.club_id,
-        state: 'lost',
+        // The flight was open (airborne) at shutdown, so restore it airborne —
+        // the next tick() can then classify an assumed landing from the real
+        // last fix, instead of always closing it 'lost' with no destination.
+        state: 'airborne',
         flightId: f.id,
+        // Carry the real altitude/rate/heading forward (not a stub), so
+        // looksLikeLanding() has the AGL and descent it needs.
         last: last
-          ? ({ ts: last.ts, lat: last.lat, lon: last.lon, gs: null, track: null } as NormPosition)
+          ? ({
+              ts: last.ts,
+              lat: last.lat,
+              lon: last.lon,
+              altBaro: last.alt_baro,
+              altGeom: last.alt_geom,
+              gs: last.gs,
+              track: last.track,
+              baroRate: last.baro_rate,
+              geomRate: last.geom_rate,
+              onGround: last.on_ground === 1,
+            } as NormPosition)
           : null,
         lastGroundFix: null,
       });
@@ -112,7 +141,7 @@ export class FlightDetector {
   }
 
   private altFt(p: NormPosition): number | null {
-    return p.altGeom ?? p.altBaro;
+    return p.altGeom ?? p.altBaro ?? null;
   }
 
   classify(clubId: number, p: NormPosition): Classification {

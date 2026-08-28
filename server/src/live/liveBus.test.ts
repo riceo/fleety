@@ -123,12 +123,18 @@ describe('LiveBus awake status', () => {
     const writes: string[] = [];
     const fakeRes = { write: (s: string) => writes.push(s), end: () => {} } as never;
     bus.flush();
-    bus.addClient(1, fakeRes, 'restricted', true, 0); // resume from id 0 replays the ring
+    // A resuming client echoes the generation-stamped id it last saw. Grab it
+    // from a fresh client's snapshot line, then resume another from just before.
+    const probe: string[] = [];
+    bus.addClient(1, { write: (s: string) => probe.push(s), end: () => {} } as never, 'restricted', true);
+    const snapId = (probe.find((w) => w.includes('event: snapshot')) ?? '').match(/id: (\S+)/)?.[1] ?? '';
+    const resumeFrom = snapId.replace(/\.(\d+)$/, (_m, n) => `.${Number(n) - 1}`); // one event earlier
+    bus.addClient(1, fakeRes, 'restricted', true, { lastEventId: resumeFrom });
     const delta = writes.find((w) => w.includes('event: delta')) ?? '';
     expect(delta).toContain('"removed":[1,2]'); // roster removal + members flip
     const writesMember: string[] = [];
     const fakeRes2 = { write: (s: string) => writesMember.push(s), end: () => {} } as never;
-    bus.addClient(1, fakeRes2, 'member', true, 0);
+    bus.addClient(1, fakeRes2, 'member', true, { lastEventId: resumeFrom });
     const memberDelta = writesMember.find((w) => w.includes('event: delta')) ?? '';
     expect(memberDelta).toContain('"removed":[1]'); // members keep aircraft 2
   });

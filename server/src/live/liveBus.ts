@@ -17,6 +17,8 @@ interface SseClient {
   clubId: number;
   audience: Audience;
   authenticated: boolean; // false = riding on public_mode
+  userId: number | null; // the member behind this stream, for targeted revocation
+  kiosk: boolean; // a kiosk-token stream, dropped when the token rotates
 }
 
 interface BufferedEvent {
@@ -37,17 +39,25 @@ class ClubChannel {
   aircraft = new Map<number, LiveAircraft>();
   ring: BufferedEvent[] = [];
   nextEventId = 1;
-  dirty = new Map<number, [number, number] | null>();
+  // Trail points appended since the last flush. An array (not a single point)
+  // so two fixes for one aircraft in the same flush window both reach clients.
+  dirty = new Map<number, [number, number][] | null>();
   trailResets = new Set<number>();
   removed = new Map<number, 'public' | 'members'>(); // left roster (visibility at removal)
   hiddenFromRestricted = new Set<number>(); // flipped public -> members
   awakeEmitted = new Map<number, number>(); // last awakeTs actually sent to clients
+  // Trails to restore on boot, held until the roster sync creates the aircraft.
+  pendingSeeds = new Map<number, { flightId: number; points: [number, number][] }>();
 }
 
 export class LiveBus {
   private channels = new Map<number, ClubChannel>();
   private clients = new Map<number, SseClient>();
   private nextClientId = 1;
+  // Per-process token stamped onto every event id. A Last-Event-ID from a
+  // previous process (e.g. before a redeploy) then cannot satisfy a resume
+  // against this run's ring — its baseline is stale, so we send a snapshot.
+  private readonly bootId = Date.now().toString(36) + Math.trunc(process.hrtime()[1] % 1_000_000).toString(36);
 
   private channel(clubId: number): ClubChannel {
     let ch = this.channels.get(clubId);
@@ -87,6 +97,15 @@ export class LiveBus {
         pos: null,
         trail: [],
       };
+      // First appearance of an aircraft with a boot-time trail to restore.
+      if (!existing) {
+        const seed = ch.pendingSeeds.get(row.id);
+        if (seed) {
+          base.flightId = seed.flightId;
+          base.trail = seed.points;
+          ch.pendingSeeds.delete(row.id);
+        }
+      }
       const iconUrl = row.icon_path ? `/uploads/${row.icon_path}` : null;
       const photoUrl = row.photo_path ? `/uploads/${row.photo_path}` : null;
       // Captured before mutation below — `existing` aliases `base`.
@@ -172,10 +191,16 @@ export class LiveBus {
   }
 
   seedTrail(clubId: number, aircraftId: number, flightId: number, points: [number, number][]): void {
-    const a = this.channel(clubId).aircraft.get(aircraftId);
-    if (!a) return;
-    a.flightId = flightId;
-    a.trail = points.slice(-TRAIL_MAX_POINTS);
+    const ch = this.channel(clubId);
+    const trimmed = points.slice(-TRAIL_MAX_POINTS);
+    const a = ch.aircraft.get(aircraftId);
+    if (a) {
+      a.flightId = flightId;
+      a.trail = trimmed;
+    } else {
+      // Aircraft not synced yet (boot ordering): apply when it first appears.
+      ch.pendingSeeds.set(aircraftId, { flightId, points: trimmed });
+    }
   }
 
   update(clubId: number, aircraftId: number, p: NormPosition, flightId: number | null): void {
@@ -205,13 +230,19 @@ export class LiveBus {
     // A position always implies presence (and this delta carries it).
     if (p.ts > (a.awakeTs ?? 0)) a.awakeTs = p.ts;
     ch.awakeEmitted.set(aircraftId, a.awakeTs ?? p.ts);
-    let appended: [number, number] | null = null;
     if (flightId !== null) {
-      appended = [p.lon, p.lat];
-      a.trail.push(appended);
+      const point: [number, number] = [p.lon, p.lat];
+      a.trail.push(point);
       if (a.trail.length > TRAIL_MAX_POINTS) a.trail.splice(0, a.trail.length - TRAIL_MAX_POINTS);
+      // Accumulate rather than overwrite: a stale primary fix and a fresher
+      // failover fix in the same cycle must both survive to the delta.
+      const prev = ch.dirty.get(aircraftId);
+      const pts = Array.isArray(prev) ? prev : [];
+      pts.push(point);
+      ch.dirty.set(aircraftId, pts);
+    } else if (!ch.dirty.has(aircraftId)) {
+      ch.dirty.set(aircraftId, null);
     }
-    ch.dirty.set(aircraftId, appended);
   }
 
   // A departure/landing/broadcast for one club: push to that club's clients so
@@ -315,7 +346,7 @@ export class LiveBus {
         if (c.clubId !== clubId) continue;
         const payload = c.audience === 'member' ? ev.member : ev.restricted;
         if (payload !== '{"aircraft":[],"removed":[]}') {
-          c.res.write(`event: delta\nid: ${ev.id}\ndata: ${payload}\n\n`);
+          c.res.write(`event: delta\nid: ${this.bootId}.${ev.id}\ndata: ${payload}\n\n`);
         }
       }
     }
@@ -326,25 +357,36 @@ export class LiveBus {
     res: ServerResponse,
     audience: Audience,
     authenticated: boolean,
-    lastEventId?: number
+    opts: { lastEventId?: string; userId?: number | null; kiosk?: boolean } = {}
   ): number {
     const ch = this.channel(clubId);
     const id = this.nextClientId++;
-    this.clients.set(id, { id, res, clubId, audience, authenticated });
+    this.clients.set(id, {
+      id,
+      res,
+      clubId,
+      audience,
+      authenticated,
+      userId: opts.userId ?? null,
+      kiosk: !!opts.kiosk,
+    });
+    // Only resume when the Last-Event-ID belongs to THIS process generation.
+    const [gen, seqStr] = (opts.lastEventId ?? '').split('.');
+    const lastSeq = gen === this.bootId ? Number(seqStr) : NaN;
     const canResume =
-      lastEventId !== undefined &&
+      Number.isFinite(lastSeq) &&
       ch.ring.length > 0 &&
-      ch.ring[0].id <= lastEventId + 1 &&
-      ch.ring[ch.ring.length - 1].id >= lastEventId;
+      ch.ring[0].id <= lastSeq + 1 &&
+      ch.ring[ch.ring.length - 1].id >= lastSeq;
     if (canResume) {
       for (const ev of ch.ring) {
-        if (ev.id <= lastEventId!) continue;
+        if (ev.id <= lastSeq) continue;
         const payload = audience === 'member' ? ev.member : ev.restricted;
-        res.write(`event: delta\nid: ${ev.id}\ndata: ${payload}\n\n`);
+        res.write(`event: delta\nid: ${this.bootId}.${ev.id}\ndata: ${payload}\n\n`);
       }
     } else {
       const lastId = ch.ring.length ? ch.ring[ch.ring.length - 1].id : 0;
-      res.write(`event: snapshot\nid: ${lastId}\ndata: ${this.snapshotPayload(clubId, audience)}\n\n`);
+      res.write(`event: snapshot\nid: ${this.bootId}.${lastId}\ndata: ${this.snapshotPayload(clubId, audience)}\n\n`);
     }
     return id;
   }
@@ -354,7 +396,34 @@ export class LiveBus {
   }
 
   heartbeat(): void {
-    for (const c of this.clients.values()) c.res.write(': ping\n\n');
+    // A named event (not an SSE comment) so the client's 'ping' listener fires
+    // and its liveness watchdog sees a healthy-but-quiet feed as alive.
+    for (const c of this.clients.values()) c.res.write('event: ping\ndata: {}\n\n');
+  }
+
+  private endClient(c: SseClient): void {
+    try {
+      c.res.end();
+    } catch {
+      /* already gone */
+    }
+    this.clients.delete(c.id);
+  }
+
+  // A member was removed from a club (or demoted): drop their live streams so
+  // members-only data stops flowing immediately, not just on the next reconnect.
+  dropUser(clubId: number, userId: number): void {
+    for (const c of [...this.clients.values()]) {
+      if (c.clubId === clubId && c.userId === userId) this.endClient(c);
+    }
+  }
+
+  // The kiosk token rotated: existing kiosk streams for this club are now
+  // unauthorized and must be cut.
+  dropKiosk(clubId: number): void {
+    for (const c of [...this.clients.values()]) {
+      if (c.clubId === clubId && c.kiosk) this.endClient(c);
+    }
   }
 
   // A club flipped private: its anonymous viewers lose the stream immediately.

@@ -220,6 +220,8 @@ export const MapView = forwardRef<MapViewHandle, Props>(function MapView(
   };
   const selectedRef = useRef(selectedId);
   selectedRef.current = selectedId ?? null;
+  const onSelectRef = useRef(onSelect);
+  onSelectRef.current = onSelect;
   const followRef = useRef(followId);
   followRef.current = followId ?? null;
   const syncDataRef = useRef<() => void>(() => {});
@@ -369,13 +371,16 @@ export const MapView = forwardRef<MapViewHandle, Props>(function MapView(
           'icon-opacity': ['case', ['get', 'ghost'], 0.55, 1],
         },
       });
+      // Call through a ref so the handler always sees the latest onSelect (its
+      // closure over the live fleet stays current — the mount-time onSelect
+      // captured an empty fleet, so map clicks never updated the share URL).
       map.on('click', 'aircraft-icons', (e) => {
         const f = e.features?.[0];
-        if (f && onSelect) onSelect(Number(f.properties?.id));
+        if (f) onSelectRef.current?.(Number(f.properties?.id));
       });
       map.on('click', (e) => {
         const feats = map.queryRenderedFeatures(e.point, { layers: ['aircraft-icons'] });
-        if (feats.length === 0 && onSelect) onSelect(null);
+        if (feats.length === 0) onSelectRef.current?.(null);
       });
       map.on('mouseenter', 'aircraft-icons', () => (map.getCanvas().style.cursor = 'pointer'));
       map.on('mouseleave', 'aircraft-icons', () => (map.getCanvas().style.cursor = ''));

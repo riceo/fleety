@@ -33,13 +33,18 @@ const shell = (title: string, body: string, cta: { href: string; label: string }
   </div>
 </div>`;
 
+// Club names are admin-controlled and land in email HTML, so escape them.
+const esc = (s: string): string =>
+  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
 export function sendInviteEmail(to: string, clubName: string, link: string): Promise<boolean> {
+  const safe = esc(clubName);
   return send(
     to,
     `You've been added to ${clubName} on Fleety`,
     shell(
-      `Welcome to ${clubName}`,
-      `<p>You've been given access to the ${clubName} operations board — live fleet tracking, flight history and the clubhouse ticker.</p><p>Set your password to get started.</p>`,
+      `Welcome to ${safe}`,
+      `<p>You've been given access to the ${safe} operations board — live fleet tracking, flight history and the clubhouse ticker.</p><p>Set your password to get started.</p>`,
       { href: link, label: 'Set your password' }
     )
   );

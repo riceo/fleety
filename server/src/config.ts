@@ -11,6 +11,19 @@ export const config = {
   adminUser: env.ADMIN_USER || 'admin',
   adminPassword: env.ADMIN_PASSWORD || '',
   production: env.NODE_ENV === 'production',
+  // How many reverse-proxy hops to trust for X-Forwarded-For (so req.ip — and
+  // thus every rate limit — cannot be spoofed via a client-supplied header).
+  // A bare number trusts that many hops nearest the app; a comma list is
+  // treated as trusted IPs/CIDRs. Default: trust one hop (the immediate proxy,
+  // e.g. Caddy/Traefik). Behind Cloudflare→Coolify set TRUST_PROXY=2.
+  trustProxy: (() => {
+    const v = env.TRUST_PROXY;
+    if (v && !/^\d+$/.test(v)) return v.split(',').map((s) => s.trim());
+    const hops = v ? Number(v) : 1;
+    // Fastify's types don't accept a bare number, so express "trust N hops" as
+    // the equivalent trust function (hop 0 is the socket peer / immediate proxy).
+    return (_addr: string, hop: number) => hop < hops;
+  })() as string[] | ((addr: string, hop: number) => boolean),
   secureCookies: env.COOKIE_SECURE ? env.COOKIE_SECURE === '1' : env.NODE_ENV === 'production',
   // Tenancy: clubs live on <slug>.<baseDomain>; anything else falls back to
   // defaultClubSlug (handy for localhost QA) or the platform landing page.

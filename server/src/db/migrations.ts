@@ -298,6 +298,23 @@ CREATE TABLE waitlist (
 ALTER TABLE clubs ADD COLUMN kiosk_prefs TEXT NOT NULL DEFAULT '{}';
 `,
   },
+  {
+    // Per-club display timezone (the board renders times in the club's local
+    // zone, not the founding club's). IANA name; UI validates on save.
+    id: 9,
+    sql: `
+ALTER TABLE clubs ADD COLUMN timezone TEXT NOT NULL DEFAULT 'Europe/London';
+`,
+  },
+  {
+    // Indexes for the two hottest tenant-scoped reads: newest-first flight
+    // history, and the nightly raw-JSON retention sweep.
+    id: 10,
+    sql: `
+CREATE INDEX IF NOT EXISTS idx_flights_started ON flights(started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_positions_raw ON positions(ts) WHERE raw IS NOT NULL;
+`,
+  },
 ];
 
 export function migrate(db: Database): void {

@@ -348,24 +348,9 @@ export function AircraftAdmin() {
   const [editing, setEditing] = useState<Partial<AdminAircraft> | null>(null);
 
   const toggle = async (a: AdminAircraft) => {
-    await put(`/api/admin/aircraft/${a.id}`, {
-      hex: a.hex,
-      registration: a.registration,
-      callsign: a.callsign,
-      typeName: a.type_name,
-      icaoType: a.icao_type,
-      nickname: a.nickname,
-      tagline: a.tagline,
-      operator: a.operator,
-      icon: a.icon,
-      color: a.color,
-      enabled: a.enabled === 0,
-      category: a.category,
-      visibility: a.visibility,
-      trackUntil: a.track_until,
-      sortOrder: a.sort_order,
-      notes: a.notes,
-    });
+    // Dedicated enable-only call — never resend the full record (that used to
+    // blank the description and any other omitted field).
+    await post(`/api/admin/aircraft/${a.id}/enabled`, { enabled: a.enabled === 0 });
     reload();
   };
 
@@ -1117,6 +1102,7 @@ interface ClubSettings {
   kiosk_token: string;
   kiosk_prefs: string;
   callsign_rules: string;
+  timezone: string;
 }
 
 const THEME_OPTIONS = [
@@ -1125,6 +1111,17 @@ const THEME_OPTIONS = [
   { key: 'heritage', label: 'Heritage — slab-serif, warm tones' },
   { key: 'daylight', label: 'Daylight — the light version' },
 ];
+
+// Tolerant parse of the stored callsign_rules JSON — a corrupt or legacy value
+// must never crash the settings page.
+function parseRules(json: string | undefined): { prefix: string; spoken: string }[] {
+  try {
+    const parsed = JSON.parse(json || '[]');
+    return Array.isArray(parsed) ? parsed.filter((r) => r && r.prefix && r.spoken) : [];
+  } catch {
+    return [];
+  }
+}
 
 export function SettingsAdmin() {
   const [data, reload] = useData<{ club: ClubSettings }>('/api/admin/settings');
@@ -1135,7 +1132,7 @@ export function SettingsAdmin() {
   const val = <K extends keyof ClubSettings>(k: K, formKey: string): ClubSettings[K] | string =>
     (form[formKey] as string | undefined) ?? club?.[k] ?? '';
   const curRules: { prefix: string; spoken: string }[] =
-    rules ?? (club ? (JSON.parse(club.callsign_rules || '[]') as { prefix: string; spoken: string }[]) : []);
+    rules ?? parseRules(club?.callsign_rules);
 
   const save = async () => {
     await put('/api/admin/settings', { ...form, ...(rules ? { callsignRules: rules } : {}) });
@@ -1220,6 +1217,22 @@ export function SettingsAdmin() {
           <label>
             Subheading
             <input value={String(val('subheading', 'subheading'))} onChange={(e) => setKey('subheading', e.target.value)} />
+          </label>
+        </div>
+        <div className="form-row">
+          <label>
+            Timezone
+            <input
+              value={String(val('timezone', 'timezone'))}
+              onChange={(e) => setKey('timezone', e.target.value)}
+              placeholder="Europe/London"
+              list="tz-list"
+            />
+            <datalist id="tz-list">
+              {['Europe/London', 'Europe/Paris', 'Europe/Berlin', 'Europe/Dublin', 'Atlantic/Canary', 'UTC'].map((t) => (
+                <option key={t} value={t} />
+              ))}
+            </datalist>
           </label>
         </div>
         <div className="form-row">
@@ -1349,9 +1362,7 @@ export function SettingsAdmin() {
 
 interface StatusRes {
   poller: { lastPollAt: number; ok: boolean; error: string | null };
-  recentPolls: { ts: number; provider: string; ok: number; error: string | null; aircraft_returned: number; duration_ms: number }[];
   counts: { positions: number; flights: number; aircraft: number; users: number };
-  dbSizeBytes: number;
   sseClients: number;
 }
 
@@ -1384,37 +1395,14 @@ export function StatusAdmin() {
           <strong>{data.counts.flights.toLocaleString()}</strong>
         </div>
         <div className="stat-tile">
-          <label>Database size</label>
-          <strong>{(data.dbSizeBytes / 1024 / 1024).toFixed(1)} MB</strong>
-        </div>
-        <div className="stat-tile">
           <label>Live viewers</label>
           <strong>{data.sseClients}</strong>
         </div>
       </div>
-      <h3>Recent polls</h3>
-      <table className="table">
-        <thead>
-          <tr>
-            <th>Time</th>
-            <th>Provider</th>
-            <th>Result</th>
-            <th>Aircraft</th>
-            <th>Duration</th>
-          </tr>
-        </thead>
-        <tbody>
-          {data.recentPolls.map((p, i) => (
-            <tr key={i}>
-              <td>{fmtDateTime(p.ts)}</td>
-              <td>{p.provider}</td>
-              <td>{p.ok ? 'ok' : `error: ${p.error}`}</td>
-              <td>{p.aircraft_returned}</td>
-              <td>{p.duration_ms} ms</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <p className="muted small">
+        Provider poll logs and total database size are shown on the Platform status page (they cover the
+        shared data feed across all clubs).
+      </p>
     </div>
   );
 }

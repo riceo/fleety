@@ -52,9 +52,29 @@ export interface ServerDeps {
 
 const THEMES = new Set(['ops', 'terminal', 'heritage', 'daylight']);
 
+const isHttpUrl = (v: unknown): boolean => {
+  if (typeof v !== 'string') return false;
+  try {
+    const u = new URL(v);
+    return u.protocol === 'http:' || u.protocol === 'https:';
+  } catch {
+    return false;
+  }
+};
+
+const isValidTimezone = (v: unknown): boolean => {
+  if (typeof v !== 'string' || !v) return false;
+  try {
+    new Intl.DateTimeFormat('en-GB', { timeZone: v });
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
   const { db, settings, live, poller, detector, clubs } = deps;
-  const app = Fastify({ logger: true, trustProxy: true, bodyLimit: 1024 * 1024 });
+  const app = Fastify({ logger: true, trustProxy: config.trustProxy, bodyLimit: 1024 * 1024 });
 
   await app.register(fastifyCookie);
   await app.register(fastifyRateLimit, { global: false });
@@ -175,7 +195,10 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
         | undefined;
       const ok = user && user.password_hash ? await verifyPassword(user.password_hash, password) : false;
       if (!user || !ok) {
-        if (!user) await hashPassword(password).catch(() => {});
+        // Spend the same argon2 time whether the account is missing OR exists
+        // but has no password set (invited, never activated) — otherwise the
+        // faster path leaks which emails are pending-activation accounts.
+        if (!user || !user.password_hash) await hashPassword(password).catch(() => {});
         return reply.code(401).send({ error: 'invalid_credentials' });
       }
       db.prepare('UPDATE users SET last_login_at = ? WHERE id = ?').run(Date.now(), user.id);
@@ -304,6 +327,7 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
       logoUrl: club.logo_path ? `/uploads/${club.logo_path}` : null,
       callsignRules: clubs.rules(club),
       kioskViewMode: kioskPrefs(club).viewMode === 'overview' ? 'overview' : 'target',
+      timezone: club.timezone,
     };
   });
 
@@ -358,15 +382,13 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
       'X-Accel-Buffering': 'no',
     });
     const lastIdHeader = req.headers['last-event-id'];
-    const lastEventId = lastIdHeader ? Number(lastIdHeader) : undefined;
-    const authenticated = !!memberRole(req, club) || isKioskFor(req, club);
-    const clientId = live.addClient(
-      club.id,
-      res,
-      audienceOf(req, club),
-      authenticated,
-      Number.isFinite(lastEventId) ? lastEventId : undefined
-    );
+    const kiosk = isKioskFor(req, club);
+    const authenticated = !!memberRole(req, club) || kiosk;
+    const clientId = live.addClient(club.id, res, audienceOf(req, club), authenticated, {
+      lastEventId: Array.isArray(lastIdHeader) ? lastIdHeader[0] : lastIdHeader,
+      userId: req.auth?.kind === 'user' ? req.auth.userId : null,
+      kiosk,
+    });
     req.raw.on('close', () => live.removeClient(clientId));
   });
 
@@ -472,10 +494,20 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     const file = (req.params as { file: string }).file;
     if (!/^[a-zA-Z0-9._-]+$/.test(file)) return reply.code(400).send({ error: 'bad_name' });
     const club = req.club;
+    if (!club) return reply.code(404).send({ error: 'not_found' });
     // The club logo shows on the login screen, so it is always fetchable.
-    const isLogo = club && file === club.logo_path;
-    if (!isLogo) {
-      if (!club || !requireViewer(req, reply, club)) return;
+    if (file === club.logo_path) return reply.sendFile(file);
+    if (!requireViewer(req, reply, club)) return;
+    // Object-level authz: the file must belong to an aircraft in THIS club, and
+    // a members-only aircraft's images are not served to a restricted audience.
+    const owner = db
+      .prepare(
+        'SELECT visibility FROM aircraft WHERE club_id = ? AND deleted_at IS NULL AND (icon_path = ? OR photo_path = ?)'
+      )
+      .get(club.id, file, file) as { visibility: string } | undefined;
+    if (!owner) return reply.code(404).send({ error: 'not_found' });
+    if (owner.visibility !== 'public' && audienceOf(req, club) !== 'member') {
+      return reply.code(404).send({ error: 'not_found' });
     }
     return reply.sendFile(file);
   });
@@ -542,14 +574,32 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     if (!clubAircraft(club, id)) return reply.code(404).send({ error: 'not_found' });
     const a = aircraftBody(req.body as Record<string, unknown>);
     if (!/^[0-9a-f]{6}$/.test(a.hex)) return reply.code(400).send({ error: 'invalid_hex' });
-    db.prepare(
-      `UPDATE aircraft SET hex=@hex, registration=@registration, callsign=@callsign, type_name=@type_name,
-         icao_type=@icao_type, nickname=@nickname, tagline=@tagline, description=@description, operator=@operator, icon=@icon, color=@color, enabled=@enabled,
-         category=@category, visibility=@visibility, track_until=@track_until, sort_order=@sort_order, notes=@notes,
-         updated_at=${Date.now()}
-       WHERE id = @id`
-    ).run({ ...a, id });
+    try {
+      db.prepare(
+        `UPDATE aircraft SET hex=@hex, registration=@registration, callsign=@callsign, type_name=@type_name,
+           icao_type=@icao_type, nickname=@nickname, tagline=@tagline, description=@description, operator=@operator, icon=@icon, color=@color, enabled=@enabled,
+           category=@category, visibility=@visibility, track_until=@track_until, sort_order=@sort_order, notes=@notes,
+           updated_at=${Date.now()}
+         WHERE id = @id`
+      ).run({ ...a, id });
+    } catch (err) {
+      if (String(err).includes('UNIQUE')) return reply.code(409).send({ error: 'hex_exists' });
+      throw err;
+    }
     audit(req, 'aircraft.update', `${a.registration} (${a.hex})`);
+    return { ok: true };
+  });
+
+  // Enable/disable only — a dedicated route so the table toggle never has to
+  // resend the whole aircraft (which would blank any field it omits).
+  app.post('/api/admin/aircraft/:id/enabled', async (req, reply) => {
+    const club = clubOf(req, reply);
+    if (!club || !requireClubAdmin(req, reply, club)) return;
+    const id = Number((req.params as { id: string }).id);
+    if (!clubAircraft(club, id)) return reply.code(404).send({ error: 'not_found' });
+    const enabled = !!(req.body as { enabled?: boolean } | null)?.enabled;
+    db.prepare('UPDATE aircraft SET enabled = ?, updated_at = ? WHERE id = ?').run(enabled ? 1 : 0, Date.now(), id);
+    audit(req, 'aircraft.enabled', `${id} ${enabled}`);
     return { ok: true };
   });
 
@@ -663,11 +713,9 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
       return reply.code(400).send({ error: 'invalid_email' });
     }
     const now = Date.now();
-    let user = db.prepare('SELECT id, email FROM users WHERE email = ?').get(cleanEmail) as
-      | { id: number }
+    let user = db.prepare('SELECT id, password_hash FROM users WHERE email = ?').get(cleanEmail) as
+      | { id: number; password_hash: string }
       | undefined;
-    let inviteLink: string | null = null;
-    let emailed = false;
     if (!user) {
       const userId = Number(
         db
@@ -677,14 +725,21 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
           )
           .run((name?.trim() || cleanEmail.split('@')[0]).slice(0, 40), cleanEmail, now).lastInsertRowid
       );
-      user = { id: userId };
-      const token = createLoginToken(db, userId, 'invite', club.id);
-      inviteLink = `${clubUrl(club.slug)}/set-password?token=${token}`;
-      emailed = await sendInviteEmail(cleanEmail, club.name, inviteLink);
+      user = { id: userId, password_hash: '' };
     }
     db.prepare(
       'INSERT OR IGNORE INTO memberships (user_id, club_id, role, created_at) VALUES (?, ?, ?, ?)'
     ).run(user.id, club.id, role === 'admin' ? 'admin' : 'member', now);
+    // (Re)send an invite only while the account has never set a password — so a
+    // re-invite after an expired token works, but an active account (which may
+    // belong to other clubs) never has a set-password link minted for it here.
+    let inviteLink: string | null = null;
+    let emailed = false;
+    if (user.password_hash === '') {
+      const token = createLoginToken(db, user.id, 'invite', club.id);
+      inviteLink = `${clubUrl(club.slug)}/set-password?token=${token}`;
+      emailed = await sendInviteEmail(cleanEmail, club.name, inviteLink);
+    }
     audit(req, 'member.invite', cleanEmail);
     // The link comes back to the admin UI only when it could not be emailed.
     return { ok: true, emailed, inviteLink: emailed ? null : inviteLink };
@@ -716,13 +771,26 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     if (!club || !requireClubAdmin(req, reply, club)) return;
     const userId = Number((req.params as { userId: string }).userId);
     const member = db
-      .prepare('SELECT u.email FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.club_id = ? AND m.user_id = ?')
-      .get(club.id, userId) as { email: string | null } | undefined;
+      .prepare(
+        `SELECT u.email, u.platform_admin,
+                (SELECT COUNT(*) FROM memberships WHERE user_id = u.id) AS club_count
+         FROM memberships m JOIN users u ON u.id = m.user_id
+         WHERE m.club_id = ? AND m.user_id = ?`
+      )
+      .get(club.id, userId) as { email: string | null; platform_admin: number; club_count: number } | undefined;
     if (!member) return reply.code(404).send({ error: 'not_found' });
     const token = createLoginToken(db, userId, 'reset', club.id);
     const link = `${clubUrl(club.slug)}/set-password?token=${token}`;
     const emailed = member.email ? await sendResetEmail(member.email, link) : false;
     audit(req, 'member.reset', String(userId));
+    // A reset sets the GLOBAL password, so the link is only ever returned to the
+    // admin when doing so cannot grant access beyond this club: the account must
+    // belong to no other club and not be a platform admin. Otherwise it can only
+    // be delivered to the member's own inbox — never handed to a third party.
+    const safeToShare = member.club_count <= 1 && member.platform_admin !== 1;
+    if (!emailed && !safeToShare) {
+      return { ok: true, emailed: false, resetLink: null, needsSelfReset: true };
+    }
     return { ok: true, emailed, resetLink: emailed ? null : link };
   });
 
@@ -743,6 +811,7 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     // Removes club access only — the global account (and any other club
     // memberships) stay intact.
     db.prepare('DELETE FROM memberships WHERE club_id = ? AND user_id = ?').run(club.id, userId);
+    live.dropUser(club.id, userId); // cut any live stream that member still holds
     audit(req, 'member.remove', String(userId));
     return { ok: true };
   });
@@ -767,7 +836,10 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
       accent: /^#[0-9a-fA-F]{6}$/.test(String(b.accent)) ? String(b.accent) : club.accent,
       map_center: String(b.mapCenter ?? club.map_center),
       map_zoom: Number(b.mapZoom) || club.map_zoom,
-      tile_style_url: String(b.tileStyleUrl ?? club.tile_style_url),
+      // Only accept a well-formed absolute http(s) tile URL; viewers' browsers
+      // fetch this, so reject javascript:/data:/garbage that could redirect them.
+      tile_style_url: isHttpUrl(b.tileStyleUrl) ? String(b.tileStyleUrl) : club.tile_style_url,
+      timezone: isValidTimezone(b.timezone) ? String(b.timezone) : club.timezone,
       public_mode: b.publicMode === undefined ? club.public_mode : b.publicMode ? 1 : 0,
       kiosk_prefs: (() => {
         if (b.kioskViewMode === undefined) return club.kiosk_prefs;
@@ -779,8 +851,10 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
         if (b.callsignRules === undefined) return club.callsign_rules;
         try {
           const rules = (b.callsignRules as { prefix?: string; spoken?: string }[])
-            .filter((r) => r?.prefix?.trim() && r?.spoken?.trim())
-            .map((r) => ({ prefix: r.prefix!.trim().toUpperCase(), spoken: r.spoken!.trim().toUpperCase() }))
+            .map((r) => ({ prefix: (r?.prefix ?? '').trim().toUpperCase(), spoken: (r?.spoken ?? '').trim().toUpperCase() }))
+            // Prefix is compiled into a RegExp downstream, so restrict it to a
+            // safe callsign charset (letters, digits, hyphen) — no metachars.
+            .filter((r) => /^[A-Z0-9-]{1,8}$/.test(r.prefix) && r.spoken)
             .slice(0, 10);
           return JSON.stringify(rules);
         } catch {
@@ -792,7 +866,7 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     db.prepare(
       `UPDATE clubs SET name=@name, subheading=@subheading, theme=@theme, accent=@accent, map_center=@map_center,
        map_zoom=@map_zoom, tile_style_url=@tile_style_url, public_mode=@public_mode, callsign_rules=@callsign_rules,
-       kiosk_prefs=@kiosk_prefs
+       kiosk_prefs=@kiosk_prefs, timezone=@timezone
        WHERE id=@id`
     ).run(next);
     clubs.reload();
@@ -810,6 +884,7 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     const token = crypto.randomBytes(24).toString('base64url');
     db.prepare('UPDATE clubs SET kiosk_token = ? WHERE id = ?').run(token, club.id);
     destroyKioskSessions(db, club.id);
+    live.dropKiosk(club.id); // and cut any kiosk stream still riding the old token
     clubs.reload();
     audit(req, 'kiosk.rotate');
     return { token };
@@ -1088,9 +1163,13 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     const club = clubOf(req, reply);
     if (!club || !requireClubAdmin(req, reply, club)) return;
     const counts = {
+      // Sum the per-flight counters (indexed, thousands of rows) instead of
+      // walking the whole platform-wide positions table on every 10s poll.
       positions: (
         db
-          .prepare('SELECT COUNT(*) c FROM positions p JOIN aircraft a ON a.id = p.aircraft_id WHERE a.club_id = ?')
+          .prepare(
+            'SELECT COALESCE(SUM(f.position_count), 0) c FROM flights f JOIN aircraft a ON a.id = f.aircraft_id WHERE a.club_id = ?'
+          )
           .get(club.id) as { c: number }
       ).c,
       flights: (
@@ -1103,11 +1182,12 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
       ).c,
       members: (db.prepare('SELECT COUNT(*) c FROM memberships WHERE club_id = ?').get(club.id) as { c: number }).c,
     };
+    // The poll log and DB size are platform-wide (the poller is shared), so a
+    // club admin only sees whether the feed is healthy — the raw cross-tenant
+    // poll rows and total DB size live on the platform-only status route.
     return {
       poller: { lastPollAt: poller.lastPollAt, ok: poller.lastPollOk, error: poller.lastPollError },
-      recentPolls: db.prepare('SELECT * FROM poll_log ORDER BY ts DESC LIMIT 30').all(),
       counts,
-      dbSizeBytes: dbFileSizeBytes(),
       sseClients: live.clientCount(club.id),
     };
   });
@@ -1119,6 +1199,15 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
   });
 
   // ---------- platform admin ----------
+
+  app.get('/api/platform/status', async (req, reply) => {
+    if (!requirePlatform(req, reply)) return;
+    return {
+      poller: { lastPollAt: poller.lastPollAt, ok: poller.lastPollOk, error: poller.lastPollError },
+      recentPolls: db.prepare('SELECT * FROM poll_log ORDER BY ts DESC LIMIT 30').all(),
+      dbSizeBytes: dbFileSizeBytes(),
+    };
+  });
 
   app.get('/api/platform/clubs', async (req, reply) => {
     if (!requirePlatform(req, reply)) return;

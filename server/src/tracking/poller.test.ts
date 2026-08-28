@@ -183,6 +183,35 @@ describe('Poller', () => {
     expect(await poller.manualRescue(999999)).toEqual({ ok: false, error: 'unknown_aircraft' });
   });
 
+  it('a mid-flight aircraft heard only as a presence still gets a rescue probe', async () => {
+    const w = world();
+    w.mkAc(w.clubA, 'aaaaaa');
+    // Open the flight from a real fix, then the primary hears only a bare
+    // presence (transponder awake, no position) — the vanished-in-flight case.
+    let primaryReturns: ProviderStates = { positions: [pos('aaaaaa', Date.now())], presences: [] };
+    const primary: AdsbProvider = { name: 'primary', fetchStates: async () => primaryReturns };
+    const rescueCalls: string[][] = [];
+    const rescueProvider: AdsbProvider = {
+      name: 'adsbx',
+      fetchStates: async (hexes) => {
+        rescueCalls.push(hexes);
+        return EMPTY;
+      },
+    };
+    const poller = new Poller(w.db, [primary], w.settings, w.detector, w.live, {
+      provider: rescueProvider,
+      monthlyBudget: 100,
+    });
+    await poller.runCycle(); // flight opens
+    primaryReturns = {
+      positions: [],
+      presences: [{ hex: 'aaaaaa', ts: Date.now(), seen: 5, callsign: null, squawk: null, onGround: null, source: 'primary' }],
+    };
+    await poller.runCycle();
+    // A fresh presence must NOT suppress the rescue: no fresh position exists.
+    expect(rescueCalls).toEqual([['aaaaaa']]);
+  });
+
   it('rescue tier never exceeds the monthly budget', async () => {
     const w = world();
     w.mkAc(w.clubA, 'aaaaaa');

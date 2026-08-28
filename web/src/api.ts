@@ -45,7 +45,9 @@ export interface TickerItem {
 }
 
 export interface LiveDelta extends Omit<LiveAircraft, 'trail'> {
-  trailAppend: [number, number] | null;
+  // Points appended since the last delta (an array so multiple fixes in one
+  // flush window all arrive); tolerant of a single pair from an older server.
+  trailAppend: [number, number][] | [number, number] | null;
   trailReset: boolean;
 }
 
@@ -68,6 +70,7 @@ export interface AppConfig {
   logoUrl?: string | null;
   callsignRules?: CallsignRule[];
   kioskViewMode?: 'target' | 'overview';
+  timezone?: string;
 }
 
 export interface Me {

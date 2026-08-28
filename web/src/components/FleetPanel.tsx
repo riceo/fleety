@@ -103,7 +103,7 @@ export function FleetPanel({
         {airborne.length === 0 && (
           <div className="bay-quiet">
             <span className="bay-quiet-big">ALL QUIET</span>
-            <span className="mono-label">FLEET ON THE GROUND AT ROCHESTER</span>
+            <span className="mono-label">FLEET ON THE GROUND</span>
           </div>
         )}
       </div>

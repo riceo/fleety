@@ -24,9 +24,15 @@ were removed from FlightRadar24; productised so any club can have one.
   stored from the moment the poller starts; no free source sells the past.
 - **Email** via [Resend](https://resend.com) for invites and password resets; without an API key,
   admins get shareable links instead.
+- **Social share cards** — deep links (`/ac/<reg>`) render a branded Open Graph JPEG for WhatsApp/
+  LinkedIn: an evergreen card for the plain URL, a live-snapshot card for the Share button.
+- **Health monitoring** — Platform → Health shows single-box vitals (event-loop delay, disk, DB size,
+  poll cycle…) with email/webhook alerts when one crosses a threshold. Liveness still belongs on an
+  external pinger.
 - Stack: Fastify + TypeScript + better-sqlite3 (`server/`), React + Vite + MapLibre GL (`web/`),
-  single container. Tests: `cd server && npm test` (flight detection, annotations, sessions, and
-  cross-tenant isolation via injected requests).
+  single container. Tests: `cd server && npm test` (flight detection, annotations, sessions, metrics,
+  security, and cross-tenant isolation via injected requests). Architecture + invariants for
+  contributors/agents live in [CLAUDE.md](CLAUDE.md).
 
 ## Local development
 
@@ -56,9 +62,13 @@ The image is a single Dockerfile; Coolify's proxy (Traefik) terminates TLS — t
 5. **Environment variables:**
    - `ADMIN_EMAIL`, `ADMIN_PASSWORD` — first-run platform admin (forced change on first sign-in)
    - `BASE_DOMAIN=fleety.live`
+   - **`TRUST_PROXY=2`** — Cloudflare→Coolify is two proxy hops; without this, `req.ip` (and every
+     rate limit) keys on a shared proxy address instead of the real client. For the rate limits to be
+     truly unspoofable, also restrict the origin firewall to Cloudflare's IP ranges.
    - `RESEND_API_KEY`, `EMAIL_FROM="Fleety <ops@fleety.live>"` — optional (verify the domain in
      Resend and add its DKIM/SPF records first)
-   - optional: `DEFAULT_CLUB=invicta`, `TZ=UTC`
+   - optional: `ADSBX_API_KEY` (paid rescue tier), `ALERT_EMAIL`/`ALERT_WEBHOOK` (health alerts),
+     `DEFAULT_CLUB=invicta`, `TZ=UTC`. See [`.env.example`](.env.example) for the full list.
 6. **Health check:** the image ships a `HEALTHCHECK` on `/healthz`; point Coolify's health check at
    `/healthz` port `8080` too if you enable it.
 7. **DNS (Cloudflare):** `A fleety.live → <node IP>` and `A invicta.fleety.live → <node IP>`
@@ -85,4 +95,5 @@ mode with the ▣ Kiosk button (click the club logo to exit).
 - **Coverage upgrade:** a Raspberry Pi + RTL-SDR receiver at a club's home field feeding the
   aggregators fixes the low-altitude blind spot where club aircraft actually fly.
 - **Privacy:** clubs decide their own public/private mode; anything naming people belongs in
-  members-only visibility. Timestamps are stored UTC; the UI renders Europe/London.
+  members-only visibility. Timestamps are stored UTC; the UI renders in each club's configured
+  timezone (Admin → Settings, default Europe/London).

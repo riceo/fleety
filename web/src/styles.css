@@ -852,6 +852,11 @@ label.check {
   .username {
     display: none;
   }
+  /* Keep the (legally required) map attribution clear of the centred FLEET
+     button on phones — lift it above the button rather than behind it. */
+  .live-map .maplibregl-ctrl-bottom-right {
+    bottom: calc(94px + env(safe-area-inset-bottom));
+  }
   .sheet-toggle {
     display: block;
     position: absolute;

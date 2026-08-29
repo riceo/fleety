@@ -42,10 +42,26 @@ export function runNightly(db: Database, settings: Settings, log: (msg: string) 
   }
 }
 
-export function scheduleNightly(db: Database, settings: Settings, log: (msg: string) => void): NodeJS.Timeout {
-  const tick = () => {
+// Self-correcting schedule: aim a setTimeout at the next 02:00 UTC and
+// re-arm after each run, so a delayed tick (a blocked loop, GC) can't cause a
+// day to be silently skipped the way a fixed hourly interval could. Returns a
+// stop function.
+export function scheduleNightly(db: Database, settings: Settings, log: (msg: string) => void): () => void {
+  let timer: NodeJS.Timeout;
+  const scheduleNext = () => {
     const now = new Date();
-    if (now.getUTCHours() === 2) runNightly(db, settings, log);
+    const next = new Date(now);
+    next.setUTCHours(2, 0, 0, 0);
+    if (next.getTime() <= now.getTime()) next.setUTCDate(next.getUTCDate() + 1);
+    timer = setTimeout(() => {
+      try {
+        runNightly(db, settings, log);
+      } catch (err) {
+        log(`retention: nightly job failed — ${err instanceof Error ? err.message : String(err)}`);
+      }
+      scheduleNext();
+    }, next.getTime() - now.getTime());
   };
-  return setInterval(tick, 3600 * 1000);
+  scheduleNext();
+  return () => clearTimeout(timer);
 }

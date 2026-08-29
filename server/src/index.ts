@@ -104,7 +104,7 @@ async function main() {
   const shutdown = async (signal: string) => {
     app.log.info(`${signal} received, shutting down`);
     clearInterval(heartbeat);
-    clearInterval(nightly);
+    nightly(); // stop the nightly schedule
     clearInterval(metricsTimer);
     clearInterval(loopReset);
     poller.stop();
@@ -114,6 +114,13 @@ async function main() {
   };
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
   process.on('SIGINT', () => void shutdown('SIGINT'));
+  // A stray rejection must not silently wedge the process; an uncaught
+  // exception leaves an undefined state, so log and let Coolify restart clean.
+  process.on('unhandledRejection', (reason) => app.log.error({ reason }, 'unhandledRejection'));
+  process.on('uncaughtException', (err) => {
+    app.log.fatal({ err }, 'uncaughtException — exiting for a clean restart');
+    void shutdown('uncaughtException');
+  });
 
   await app.listen({ port: config.port, host: config.host });
   app.log.info(`Fleety listening on :${config.port}, serving web from ${webDist}`);

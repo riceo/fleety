@@ -114,7 +114,11 @@ export function KioskPage() {
   }, []);
 
   // Watchdog: reload nightly at ~03:00 and whenever the feed has been dead
-  // for 5+ minutes — cheap insurance against browser leaks on a TV.
+  // for 5+ minutes — cheap insurance against browser leaks on a TV. lastEventAt
+  // is read through a ref so the interval isn't torn down on every delta/ping
+  // (which previously meant the nightly branch never survived long enough to fire).
+  const lastEventAtRef = useRef(live.lastEventAt);
+  lastEventAtRef.current = live.lastEventAt;
   useEffect(() => {
     const started = Date.now();
     const t = setInterval(() => {
@@ -122,12 +126,12 @@ export function KioskPage() {
       if (now.getHours() === 3 && now.getMinutes() < 2 && Date.now() - started > 10 * 60_000) {
         window.location.reload();
       }
-      if (ready && Date.now() - live.lastEventAt > 5 * 60_000) {
+      if (ready && Date.now() - lastEventAtRef.current > 5 * 60_000) {
         window.location.reload();
       }
     }, 60_000);
     return () => clearInterval(t);
-  }, [ready, live.lastEventAt]);
+  }, [ready]);
 
   // Auto-refresh after a deploy: the built entry script is content-hashed, so
   // when the server starts serving a different filename than the one this kiosk

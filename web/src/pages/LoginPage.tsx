@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { ApiError, post } from '../api';
 import { useAuth } from '../auth';
@@ -166,7 +166,12 @@ export function SetPasswordPage() {
   const { config, refresh } = useAuth();
   const navigate = useNavigate();
   const [params] = useSearchParams();
-  const token = params.get('token') ?? '';
+  // Capture the single-use token once, then scrub it from the address bar (as
+  // the kiosk flow does) so it doesn't linger in history/referrers.
+  const [token] = useState(() => params.get('token') ?? '');
+  useEffect(() => {
+    if (params.get('token')) window.history.replaceState(null, '', '/set-password');
+  }, [params]);
   const [next, setNext] = useState('');
   const [confirm, setConfirm] = useState('');
   const [error, setError] = useState('');

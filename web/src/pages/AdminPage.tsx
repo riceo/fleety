@@ -1362,7 +1362,7 @@ export function SettingsAdmin() {
 
 interface StatusRes {
   poller: { lastPollAt: number; ok: boolean; error: string | null };
-  counts: { positions: number; flights: number; aircraft: number; users: number };
+  counts: { positions: number; flights: number; aircraft: number; members: number };
   sseClients: number;
 }
 

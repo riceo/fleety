@@ -55,6 +55,25 @@ export interface ServerDeps {
 
 const THEMES = new Set(['ops', 'terminal', 'heritage', 'daylight']);
 
+// Defense-in-depth. Locked where it costs nothing (no external scripts beyond
+// PostHog, no framing, no <base>/object/form hijack); permissive on connect/img
+// so admin-configurable map tiles, Google Fonts and PostHog keep working.
+// 'unsafe-inline' script is the pragmatic concession for the inline PostHog
+// bootstrap — escaping is the primary XSS defense, this is the backstop.
+const CSP = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline' https://eu.i.posthog.com https://eu-assets.i.posthog.com",
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "font-src 'self' data: https://fonts.gstatic.com",
+  "img-src 'self' data: blob: https:",
+  "connect-src 'self' https: wss:",
+  "worker-src 'self' blob:",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "frame-ancestors 'self'",
+  "form-action 'self'",
+].join('; ');
+
 const isHttpUrl = (v: unknown): boolean => {
   if (typeof v !== 'string') return false;
   try {
@@ -77,10 +96,52 @@ const isValidTimezone = (v: unknown): boolean => {
 
 export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
   const { db, settings, live, poller, detector, clubs } = deps;
-  const app = Fastify({ logger: true, trustProxy: config.trustProxy, bodyLimit: 1024 * 1024 });
+  const app = Fastify({
+    // Strip the query string from logged request URLs so single-use invite/reset
+    // tokens (?token=…) never land in stdout/Docker logs.
+    logger: {
+      serializers: {
+        req: (req) => ({ method: req.method, url: (req.url || '').split('?')[0], host: req.headers?.host }),
+      },
+    },
+    trustProxy: config.trustProxy,
+    bodyLimit: 1024 * 1024,
+  });
 
   await app.register(fastifyCookie);
-  await app.register(fastifyRateLimit, { global: false });
+  await app.register(fastifyRateLimit, {
+    global: false,
+    // Key on Cloudflare's authoritative client IP when present (unspoofable
+    // once the origin is locked to Cloudflare), else the proxy-derived req.ip.
+    keyGenerator: (req) => {
+      const cf = req.headers['cf-connecting-ip'];
+      const ip = typeof cf === 'string' && cf ? cf : req.ip;
+      return ip;
+    },
+  });
+
+  // Per-ACCOUNT login throttle — independent of IP, so it holds even if the
+  // per-IP limiter is defeated by header spoofing on a directly-reachable
+  // origin. After too many failures for one email, that account is briefly
+  // locked regardless of source address.
+  const loginFails = new Map<string, { count: number; windowUntil: number; lockUntil: number }>();
+  const LOGIN_MAX_FAILS = 8;
+  const LOGIN_WINDOW_MS = 15 * 60_000; // failures counted within this window
+  const LOGIN_LOCK_MS = 15 * 60_000; // lock duration once the count is hit
+  const accountLocked = (email: string): boolean => {
+    const e = loginFails.get(email.toLowerCase());
+    return !!e && e.lockUntil > Date.now();
+  };
+  const noteLoginFail = (email: string): void => {
+    const key = email.toLowerCase();
+    const now = Date.now();
+    let e = loginFails.get(key);
+    if (!e || e.windowUntil <= now) e = { count: 0, windowUntil: now + LOGIN_WINDOW_MS, lockUntil: 0 };
+    e.count++;
+    if (e.count >= LOGIN_MAX_FAILS) e.lockUntil = now + LOGIN_LOCK_MS;
+    loginFails.set(key, e);
+    if (loginFails.size > 5000) for (const [k, v] of loginFails) if (v.windowUntil <= now && v.lockUntil <= now) loginFails.delete(k);
+  };
   await app.register(fastifyMultipart, { limits: { fileSize: 10 * 1024 * 1024, files: 1 } });
 
   const emitTicker: TickerEmit = (ev) => live.broadcastTicker(ev.clubId, ev);
@@ -124,6 +185,7 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     }
     reply.header('X-Content-Type-Options', 'nosniff');
     reply.header('Referrer-Policy', 'same-origin');
+    reply.header('Content-Security-Policy', CSP);
   });
 
   // ---------- access helpers ----------
@@ -188,6 +250,9 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     async (req, reply) => {
       const { email, password } = (req.body ?? {}) as { email?: string; password?: string };
       if (!email || !password) return reply.code(400).send({ error: 'missing_credentials' });
+      // Per-account lock: defeats brute-force against a known email even when
+      // the attacker rotates source IPs.
+      if (accountLocked(email)) return reply.code(429).send({ error: 'too_many_attempts' });
       // Email is the identity; username matching keeps pre-Fleety logins alive.
       const user = db
         .prepare(
@@ -202,8 +267,10 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
         // but has no password set (invited, never activated) — otherwise the
         // faster path leaks which emails are pending-activation accounts.
         if (!user || !user.password_hash) await hashPassword(password).catch(() => {});
+        noteLoginFail(email);
         return reply.code(401).send({ error: 'invalid_credentials' });
       }
+      loginFails.delete(email.toLowerCase()); // success clears the account's failure count
       db.prepare('UPDATE users SET last_login_at = ? WHERE id = ?').run(Date.now(), user.id);
       const token = createSession(db, 'user', user.id);
       setSessionCookie(reply, token);
@@ -354,7 +421,7 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
           clean,
           marketing ? 1 : 0,
           Date.now(),
-          req.headers.host ?? ''
+          req.club?.slug ?? 'apex' // resolved slug, never the raw attacker-controlled Host
         );
         void sendWaitlistNotification(clean, !!marketing);
       } else if (marketing) {
@@ -376,6 +443,9 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     const club = req.club;
     if (!club) return reply.code(404).send({ error: 'unknown_club' });
     if (!requireViewer(req, reply, club)) return;
+    // Bound concurrent streams before hijacking, so a flood of EventSource
+    // connections can't exhaust the single process.
+    if (live.atCapacity(req.ip)) return reply.code(503).send({ error: 'at_capacity' });
     const res = reply.raw;
     reply.hijack();
     res.writeHead(200, {
@@ -391,6 +461,7 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
       lastEventId: Array.isArray(lastIdHeader) ? lastIdHeader[0] : lastIdHeader,
       userId: req.auth?.kind === 'user' ? req.auth.userId : null,
       kiosk,
+      ip: req.ip,
     });
     req.raw.on('close', () => live.removeClient(clientId));
   });
@@ -1104,8 +1175,12 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
       id: number;
       aircraft_id: number;
       started_at?: number;
+      ended_at: number | null;
     }[];
     if (flights.length !== flightIds.length) return reply.code(404).send({ error: 'not_found' });
+    // A flight the detector is still tracking (open) must not be merged away —
+    // it would leave the detector pointed at a deleted row.
+    if (flights.some((f) => f.ended_at === null)) return reply.code(409).send({ error: 'flight_in_progress' });
     if (new Set(flights.map((f) => f.aircraft_id)).size !== 1) {
       return reply.code(400).send({ error: 'different_aircraft' });
     }
@@ -1132,6 +1207,7 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     const flight = clubFlight(club, id);
     const { atTs } = (req.body ?? {}) as { atTs?: number };
     if (!flight || !atTs) return reply.code(400).send({ error: 'invalid_split' });
+    if (flight.ended_at === null) return reply.code(409).send({ error: 'flight_in_progress' });
     const split = db.transaction(() => {
       const res = db
         .prepare(
@@ -1158,7 +1234,9 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     const club = clubOf(req, reply);
     if (!club || !requireClubAdmin(req, reply, club)) return;
     const id = Number((req.params as { id: string }).id);
-    if (!clubFlight(club, id)) return reply.code(404).send({ error: 'not_found' });
+    const flight = clubFlight(club, id);
+    if (!flight) return reply.code(404).send({ error: 'not_found' });
+    if (flight.ended_at === null) return reply.code(409).send({ error: 'flight_in_progress' });
     const del = db.transaction(() => {
       db.prepare('UPDATE positions SET flight_id = NULL WHERE flight_id = ?').run(id);
       db.prepare('DELETE FROM flights WHERE id = ?').run(id);
@@ -1362,6 +1440,22 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
   const ogCache = new Map<string, { at: number; buf: Buffer }>();
   const OG_CACHE_MS = 60_000;
 
+  // Distinct live-bucket renders allowed per aircraft per minute (see og.jpg).
+  const ogBuckets = new Map<number, { minute: number; seen: Set<string> }>();
+  const ogBucketAllowed = (aircraftId: number, bucket: string): boolean => {
+    const minute = Math.floor(Date.now() / 60_000);
+    let e = ogBuckets.get(aircraftId);
+    if (!e || e.minute !== minute) {
+      e = { minute, seen: new Set() };
+      ogBuckets.set(aircraftId, e);
+      if (ogBuckets.size > 500) for (const [k, v] of ogBuckets) if (v.minute < minute) ogBuckets.delete(k);
+    }
+    if (e.seen.has(bucket)) return true;
+    if (e.seen.size >= 3) return false; // cap distinct buckets/aircraft/minute
+    e.seen.add(bucket);
+    return true;
+  };
+
   interface ShellMeta {
     title: string;
     description: string;
@@ -1410,9 +1504,12 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
         : []),
       ...(meta.noindex ? [`<meta name="robots" content="noindex" />`] : []),
     ].join('\n    ');
+    // Function replacements: the injected strings contain admin-controlled text
+    // and escapeHtml doesn't neutralise `$`, so a literal replacement would let
+    // `$&`/`$1` etc. splice the document. A function replacement is `$`-safe.
     html = html
-      .replace(/<title>[\s\S]*?<\/title>/, `<title>${escapeHtml(meta.title)}</title>`)
-      .replace(/<!--fleety:meta-->[\s\S]*?<!--\/fleety:meta-->/, tags);
+      .replace(/<title>[\s\S]*?<\/title>/, () => `<title>${escapeHtml(meta.title)}</title>`)
+      .replace(/<!--fleety:meta-->[\s\S]*?<!--\/fleety:meta-->/, () => tags);
     return reply.type('text/html').header('Cache-Control', 'no-cache').send(html);
   };
 
@@ -1490,7 +1587,12 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     const reg = String((req.params as { reg: string }).reg ?? '').trim();
     const ac = publicAircraftFor(club, reg);
     if (!club || !ac) return reply.code(404).send({ error: 'not_found' });
-    const bucket = shareBucket(req); // null => evergreen; else a live snapshot
+    let bucket = shareBucket(req); // null => evergreen; else a live snapshot
+    // Anti-amplification: legitimate shares of an aircraft within a minute all
+    // carry the SAME bucket (one render). A flood of varied ?s= values would
+    // otherwise force a fresh sharp render each; past a small cap per aircraft
+    // per minute, fall back to the (cached) evergreen card.
+    if (bucket && !ogBucketAllowed(ac.id, bucket)) bucket = null;
     // In-process cache absorbs the scrape burst (WhatsApp/Slack/Twitter each
     // hit it, plus retries). Keyed by bucket so a new minute renders fresh and
     // the evergreen card is its own entry. Both get a modest edge TTL — long

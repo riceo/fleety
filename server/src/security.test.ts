@@ -69,6 +69,57 @@ describe('security fixes', () => {
     await w.app.close();
   });
 
+  it('locks a specific account after repeated failures, regardless of source IP', async () => {
+    const login = (password: string, xff: string) =>
+      w.app.inject({
+        method: 'POST',
+        url: '/api/login',
+        headers: { ...H('alpha.fleety.live'), 'x-forwarded-for': xff },
+        payload: { email: 'admin@alpha.club', password },
+      });
+    // 8 wrong passwords, each from a DIFFERENT spoofed IP (defeats per-IP only).
+    for (let i = 0; i < 8; i++) {
+      const r = await login('nope', `203.0.113.${i}`);
+      expect(r.statusCode).toBe(401);
+    }
+    // The account is now locked even from a fresh IP and even with the RIGHT password.
+    const locked = await login('password-123', '198.51.100.9');
+    expect(locked.statusCode).toBe(429);
+    expect(locked.json()).toEqual({ error: 'too_many_attempts' });
+    // A different account is unaffected (per-account, not global).
+    const other = await login('password-123', '198.51.100.9');
+    expect(other.statusCode).toBe(429); // same locked account
+    const freshAccount = await w.app.inject({
+      method: 'POST',
+      url: '/api/login',
+      headers: H('alpha.fleety.live'),
+      payload: { email: 'someone-else@x.com', password: 'x' },
+    });
+    expect(freshAccount.statusCode).toBe(401); // not locked
+  });
+
+  it('refuses to delete or split a flight that is still in progress', async () => {
+    const acId = Number(
+      w.db
+        .prepare("INSERT INTO aircraft (club_id, hex, registration, visibility, enabled, created_at, updated_at) VALUES (?, 'fl1234', 'G-FLY', 'public', 1, 0, 0)")
+        .run(w.clubA).lastInsertRowid
+    );
+    const fId = Number(
+      w.db
+        .prepare('INSERT INTO flights (aircraft_id, started_at, ended_at, position_count, created_at) VALUES (?, 1000, NULL, 5, 0)')
+        .run(acId).lastInsertRowid
+    );
+    const del = await w.app.inject({ method: 'DELETE', url: `/api/admin/flights/${fId}`, headers: H('alpha.fleety.live', w.adminACookie), payload: {} });
+    expect(del.statusCode).toBe(409);
+    const split = await w.app.inject({
+      method: 'POST',
+      url: `/api/admin/flights/${fId}/split`,
+      headers: H('alpha.fleety.live', w.adminACookie),
+      payload: { atTs: 1500 },
+    });
+    expect(split.statusCode).toBe(409);
+  });
+
   it('escapeRegex neutralises metacharacters and displayCallsignFor never throws', () => {
     expect(escapeRegex('G-(')).toBe('G-\\(');
     // A malicious prefix must be matched literally, not compiled as a regex.

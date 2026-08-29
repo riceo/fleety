@@ -19,7 +19,12 @@ interface SseClient {
   authenticated: boolean; // false = riding on public_mode
   userId: number | null; // the member behind this stream, for targeted revocation
   kiosk: boolean; // a kiosk-token stream, dropped when the token rotates
+  ip: string; // for the per-IP connection cap
 }
+
+// Bound concurrent SSE streams so one script can't exhaust the single process.
+const MAX_CLIENTS_GLOBAL = 4000;
+const MAX_CLIENTS_PER_IP = 30;
 
 interface BufferedEvent {
   id: number;
@@ -58,6 +63,29 @@ export class LiveBus {
   // previous process (e.g. before a redeploy) then cannot satisfy a resume
   // against this run's ring — its baseline is stale, so we send a snapshot.
   private readonly bootId = Date.now().toString(36) + Math.trunc(process.hrtime()[1] % 1_000_000).toString(36);
+
+  // Write to a client, dropping it on any error — a broken/closed socket must
+  // never throw up into the poll loop (which would stop scheduling cycles).
+  private safeWrite(c: SseClient, data: string): void {
+    try {
+      c.res.write(data);
+    } catch {
+      try {
+        c.res.end();
+      } catch {
+        /* already gone */
+      }
+      this.clients.delete(c.id);
+    }
+  }
+
+  // Rejected before the SSE stream is hijacked (the route sends 503).
+  atCapacity(ip: string): boolean {
+    if (this.clients.size >= MAX_CLIENTS_GLOBAL) return true;
+    let perIp = 0;
+    for (const c of this.clients.values()) if (c.ip === ip && ++perIp >= MAX_CLIENTS_PER_IP) return true;
+    return false;
+  }
 
   private channel(clubId: number): ClubChannel {
     let ch = this.channels.get(clubId);
@@ -255,7 +283,7 @@ export class LiveBus {
     for (const c of this.clients.values()) {
       if (c.clubId !== clubId) continue;
       if (ev.visibility === 'members' && c.audience !== 'member') continue;
-      c.res.write(`event: ticker\ndata: ${payload}\n\n`);
+      this.safeWrite(c, `event: ticker\ndata: ${payload}\n\n`);
     }
   }
 
@@ -349,7 +377,7 @@ export class LiveBus {
         if (c.clubId !== clubId) continue;
         const payload = c.audience === 'member' ? ev.member : ev.restricted;
         if (payload !== '{"aircraft":[],"removed":[]}') {
-          c.res.write(`event: delta\nid: ${this.bootId}.${ev.id}\ndata: ${payload}\n\n`);
+          this.safeWrite(c, `event: delta\nid: ${this.bootId}.${ev.id}\ndata: ${payload}\n\n`);
         }
       }
     }
@@ -360,7 +388,7 @@ export class LiveBus {
     res: ServerResponse,
     audience: Audience,
     authenticated: boolean,
-    opts: { lastEventId?: string; userId?: number | null; kiosk?: boolean } = {}
+    opts: { lastEventId?: string; userId?: number | null; kiosk?: boolean; ip?: string } = {}
   ): number {
     const ch = this.channel(clubId);
     const id = this.nextClientId++;
@@ -372,6 +400,7 @@ export class LiveBus {
       authenticated,
       userId: opts.userId ?? null,
       kiosk: !!opts.kiosk,
+      ip: opts.ip ?? '',
     });
     // Only resume when the Last-Event-ID belongs to THIS process generation.
     const [gen, seqStr] = (opts.lastEventId ?? '').split('.');
@@ -385,11 +414,11 @@ export class LiveBus {
       for (const ev of ch.ring) {
         if (ev.id <= lastSeq) continue;
         const payload = audience === 'member' ? ev.member : ev.restricted;
-        res.write(`event: delta\nid: ${this.bootId}.${ev.id}\ndata: ${payload}\n\n`);
+        this.safeWrite(this.clients.get(id)!, `event: delta\nid: ${this.bootId}.${ev.id}\ndata: ${payload}\n\n`);
       }
     } else {
       const lastId = ch.ring.length ? ch.ring[ch.ring.length - 1].id : 0;
-      res.write(`event: snapshot\nid: ${this.bootId}.${lastId}\ndata: ${this.snapshotPayload(clubId, audience)}\n\n`);
+      this.safeWrite(this.clients.get(id)!, `event: snapshot\nid: ${this.bootId}.${lastId}\ndata: ${this.snapshotPayload(clubId, audience)}\n\n`);
     }
     return id;
   }
@@ -401,7 +430,7 @@ export class LiveBus {
   heartbeat(): void {
     // A named event (not an SSE comment) so the client's 'ping' listener fires
     // and its liveness watchdog sees a healthy-but-quiet feed as alive.
-    for (const c of this.clients.values()) c.res.write('event: ping\ndata: {}\n\n');
+    for (const c of this.clients.values()) this.safeWrite(c, 'event: ping\ndata: {}\n\n');
   }
 
   private endClient(c: SseClient): void {

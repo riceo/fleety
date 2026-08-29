@@ -60,7 +60,7 @@ describe('waitlist', () => {
     };
     expect(row.email).toBe('chair@someclub.co.uk'); // trimmed + lowercased
     expect(row.marketing_opt_in).toBe(1);
-    expect(row.source).toBe('fleety.live');
+    expect(row.source).toBe('apex'); // resolved slug (apex host = no club), not the raw Host
   });
 
   it('is idempotent and only ever upgrades marketing consent', async () => {

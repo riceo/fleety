@@ -63,6 +63,14 @@
         api_host: 'https://eu.i.posthog.com',
         defaults: '2025-05-24',
         persistence: 'memory',
+        // Never send URL query strings to PostHog — the invite/reset link
+        // carries a single-use ?token= that must not reach a third party.
+        sanitize_properties: function (props) {
+          for (var k of ['$current_url', '$referrer', '$pathname']) {
+            if (typeof props[k] === 'string') props[k] = props[k].split('?')[0];
+          }
+          return props;
+        },
       });
     </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />

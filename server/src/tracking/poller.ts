@@ -165,6 +165,11 @@ export class Poller {
   // suggests an active flight.
   private applyBatch(states: ProviderStates, byHex: Map<string, AircraftRow[]>): boolean {
     let anyActive = false;
+    // The in-memory dedupe watermark and live/UI state are advanced only AFTER
+    // the DB transaction commits. Otherwise a rollback (realistically disk-full)
+    // would leave the watermark ahead of the rolled-back inserts and silently
+    // lose those fixes forever.
+    const applied: { clubId: number; acId: number; p: NormPosition; flightId: number | null }[] = [];
     const apply = this.db.transaction(() => {
       for (const p of states.positions) {
         for (const ac of byHex.get(p.hex) ?? []) {
@@ -172,13 +177,16 @@ export class Poller {
           if (p.ts <= lastTs) continue; // stale fix repeated by the aggregator
           const flightId = this.detector.onPosition({ id: ac.id, club_id: ac.club_id }, p);
           this.insertPosition(ac.id, p, flightId);
-          this.lastTsByAircraft.set(ac.id, p.ts);
-          this.live.update(ac.club_id, ac.id, p, flightId);
-          if (flightId !== null && p.ts > Date.now() - 120_000) anyActive = true;
+          applied.push({ clubId: ac.club_id, acId: ac.id, p, flightId });
         }
       }
     });
-    apply();
+    apply(); // throws (and rolls back) on failure — the post-commit block is skipped
+    for (const a of applied) {
+      this.lastTsByAircraft.set(a.acId, a.p.ts);
+      this.live.update(a.clubId, a.acId, a.p, a.flightId);
+      if (a.flightId !== null && a.p.ts > Date.now() - 120_000) anyActive = true;
+    }
     for (const pr of states.presences) {
       for (const ac of byHex.get(pr.hex) ?? []) {
         this.live.presence(ac.club_id, ac.id, pr.ts);
@@ -457,23 +465,31 @@ export class Poller {
     }
     this.lastPollAt = Date.now();
 
-    for (const [clubId, notes] of activeNotesByClub(this.db)) {
-      this.live.setNotes(clubId, notes);
+    // The live fan-out tail must never stop the loop: a throw here (e.g. a
+    // write on a half-closed socket) is caught, logged, and the next cycle is
+    // still scheduled in the finally.
+    try {
+      for (const [clubId, notes] of activeNotesByClub(this.db)) {
+        this.live.setNotes(clubId, notes);
+      }
+      this.live.refreshStatuses();
+      this.live.flush();
+    } catch (tailErr) {
+      this.lastPollError = tailErr instanceof Error ? tailErr.message : String(tailErr);
+    } finally {
+      // Only the started loop schedules follow-ups (tests drive runCycle directly).
+      if (this.running) {
+        const fast = this.settings.getNum('poll_fast_ms', 5000);
+        const slow = this.settings.getNum('poll_slow_ms', 30000);
+        let delay = anyActive ? fast : slow;
+        if (this.consecutiveErrors > 0) {
+          delay = Math.min(slow * 2 ** Math.min(this.consecutiveErrors, 5), MAX_BACKOFF_MS);
+        }
+        // Jitter ±10% keeps us from syncing up with other pollers on the API.
+        delay = Math.round(delay * (0.9 + Math.random() * 0.2));
+        this.timer = setTimeout(() => void this.loop(), delay);
+      }
     }
-    this.live.refreshStatuses();
-    this.live.flush();
-    // Only the started loop schedules follow-ups (tests drive runCycle directly).
-    if (!this.running) return;
-
-    const fast = this.settings.getNum('poll_fast_ms', 5000);
-    const slow = this.settings.getNum('poll_slow_ms', 30000);
-    let delay = anyActive ? fast : slow;
-    if (this.consecutiveErrors > 0) {
-      delay = Math.min(slow * 2 ** Math.min(this.consecutiveErrors, 5), MAX_BACKOFF_MS);
-    }
-    // Jitter ±10% keeps us from syncing up with other pollers on the API.
-    delay = Math.round(delay * (0.9 + Math.random() * 0.2));
-    this.timer = setTimeout(() => void this.loop(), delay);
   }
 
   private async loop(): Promise<void> {

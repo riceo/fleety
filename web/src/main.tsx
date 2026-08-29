@@ -2,6 +2,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { createBrowserRouter, RouterProvider } from 'react-router-dom';
 import { AuthProvider } from './auth';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { LivePage } from './pages/LivePage';
 import { LoginPage, SetPasswordPage } from './pages/LoginPage';
 import { HistoryPage } from './pages/HistoryPage';
@@ -50,8 +51,10 @@ const router = createBrowserRouter([
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <AuthProvider>
-      <RouterProvider router={router} />
-    </AuthProvider>
+    <ErrorBoundary>
+      <AuthProvider>
+        <RouterProvider router={router} />
+      </AuthProvider>
+    </ErrorBoundary>
   </React.StrictMode>
 );

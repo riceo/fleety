@@ -63,6 +63,12 @@ interface PaletteEntry {
 
 function bandFor(dbz: number, snow: boolean): [number, number, number] | null {
   if (snow) return dbz >= SNOW_MIN_DBZ ? BAND_SNOW : null;
+  // 65+ occupies the palette's white/green slots. Real composites essentially
+  // never get there (world-record hail), but white IS the text colour of the
+  // CDN's "Zoom Level Not Supported" placeholder tile — mapping it to a band
+  // would paint that message onto the map, so drop it. The magenta 50–64 ring
+  // around any genuine extreme core still shows.
+  if (dbz >= 65) return null;
   if (dbz >= 50) return BAND_EXTREME;
   if (dbz >= 40) return BAND_HEAVY;
   if (dbz >= RAIN_MIN_DBZ) return BAND_MODERATE;
@@ -197,7 +203,7 @@ export function attachWeather(map: maplibregl.Map): () => void {
       const path = frames[frames.length - 1].path;
       if (path === currentPath) return;
       currentPath = path;
-      const tiles = [`${PROTOCOL}://${host.slice('https://'.length)}${path}/256/{z}/{x}/{y}/2/1_1.png`];
+      const tiles = [`${PROTOCOL}://${host.slice('https://'.length)}${path}/512/{z}/{x}/{y}/2/1_1.png`];
       const src = map.getSource(SOURCE_ID) as maplibregl.RasterTileSource | undefined;
       if (src) {
         src.setTiles(tiles);
@@ -206,8 +212,12 @@ export function attachWeather(map: maplibregl.Map): () => void {
       map.addSource(SOURCE_ID, {
         type: 'raster',
         tiles,
-        tileSize: 256,
-        maxzoom: 9, // radar is ~1km data; overzoom beyond this instead of re-fetching
+        tileSize: 512,
+        // The free tier serves real radar only up to z7 — above that the CDN
+        // returns a static "Zoom Level Not Supported" tile (HTTP 200, so only
+        // the pixels give it away). Clamp and let MapLibre overzoom the z7
+        // data; 512px tiles keep the stretch acceptably crisp at board zooms.
+        maxzoom: 7,
         attribution: '<a href="https://www.rainviewer.com/" target="_blank" rel="noopener">RainViewer</a>',
       });
       // Slot beneath the base style's first label layer: weather shades the

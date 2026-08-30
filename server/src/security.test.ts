@@ -295,3 +295,37 @@ describe('security fixes', () => {
     expect(r2.statusCode).toBe(404);
   });
 });
+
+describe('club settings', () => {
+  let w: World;
+  beforeEach(async () => {
+    w = await build();
+  });
+  afterEach(async () => {
+    await w.app.close();
+  });
+
+  it('weather overlay defaults on, can be switched off by an admin, and reaches /api/config', async () => {
+    const cfg = () => w.app.inject({ method: 'GET', url: '/api/config', headers: H('alpha.fleety.live') });
+    expect((await cfg()).json().weatherLayer).toBe(true);
+
+    const off = await w.app.inject({
+      method: 'PUT',
+      url: '/api/admin/settings',
+      headers: H('alpha.fleety.live', w.adminACookie),
+      payload: { weatherLayer: false },
+    });
+    expect(off.statusCode).toBe(200);
+    expect((off.json() as { club: { weather_layer: number } }).club.weather_layer).toBe(0);
+    expect((await cfg()).json().weatherLayer).toBe(false);
+
+    // A save that doesn't mention the field leaves it alone.
+    await w.app.inject({
+      method: 'PUT',
+      url: '/api/admin/settings',
+      headers: H('alpha.fleety.live', w.adminACookie),
+      payload: { name: 'ALPHA AERO' },
+    });
+    expect((await cfg()).json().weatherLayer).toBe(false);
+  });
+});

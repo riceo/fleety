@@ -5,6 +5,7 @@ import { api, type AppConfig, type LiveAircraft } from '../api';
 import { renderIcon, renderRoundel } from '../icons';
 import { isSparkly } from '../sparkle';
 import { displayCallsign } from '../format';
+import { attachWeather } from '../weather';
 
 const CLUB_BLUE = '#5b6bc4';
 
@@ -268,6 +269,7 @@ export const MapView = forwardRef<MapViewHandle, Props>(function MapView(
       }
     }, 1000);
 
+    let detachWeather: (() => void) | undefined;
     map.on('load', () => {
       addAirfieldLayers(map, config.accent ?? '#e32636', (bases) => {
         basesRef.current = bases;
@@ -387,10 +389,14 @@ export const MapView = forwardRef<MapViewHandle, Props>(function MapView(
       map.on('mouseleave', 'aircraft-icons', () => (map.getCanvas().style.cursor = ''));
       readyRef.current = true;
       syncData();
+      // Significant-weather radar (per-club admin toggle). Slots itself under
+      // the base style's labels; all board layers stay above it.
+      if (config.weatherLayer) detachWeather = attachWeather(map);
     });
 
     return () => {
       readyRef.current = false;
+      detachWeather?.();
       clearInterval(drTick);
       ro.disconnect();
       map.remove();
@@ -398,7 +404,7 @@ export const MapView = forwardRef<MapViewHandle, Props>(function MapView(
       iconSigs.current.clear();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [config.tileStyleUrl]);
+  }, [config.tileStyleUrl, config.weatherLayer]);
 
   const syncData = () => {
     const map = mapRef.current;

@@ -1103,6 +1103,7 @@ interface ClubSettings {
   kiosk_prefs: string;
   callsign_rules: string;
   timezone: string;
+  weather_layer: number;
 }
 
 const THEME_OPTIONS = [
@@ -1159,6 +1160,7 @@ export function SettingsAdmin() {
     }
   })();
   const publicOn = form.publicMode !== undefined ? !!form.publicMode : club?.public_mode === 1;
+  const weatherOn = form.weatherLayer !== undefined ? !!form.weatherLayer : club?.weather_layer === 1;
   const kioskUrl = club ? `${window.location.origin}/kiosk?token=${club.kiosk_token}` : '';
 
   return (
@@ -1342,6 +1344,15 @@ export function SettingsAdmin() {
             <input value={String(val('map_zoom', 'mapZoom'))} onChange={(e) => setKey('mapZoom', e.target.value)} style={{ width: '5rem' }} />
           </label>
         </div>
+        <label className="check">
+          <input type="checkbox" checked={weatherOn} onChange={(e) => setKey('weatherLayer', e.target.checked)} />
+          Show significant weather (live rain radar)
+        </label>
+        <p className="muted small">
+          Overlays moderate-or-stronger precipitation on the live board and kiosk — amber / red / magenta like an
+          airborne weather radar, plus ice-blue for snow. Light rain and drizzle are filtered out, so the map stays
+          clean until there&rsquo;s weather that matters. Data from RainViewer, refreshed every ~10 minutes.
+        </p>
       </section>
 
       <div className="form-actions">

@@ -315,6 +315,15 @@ CREATE INDEX IF NOT EXISTS idx_flights_started ON flights(started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_positions_raw ON positions(ts) WHERE raw IS NOT NULL;
 `,
   },
+  {
+    // Per-club toggle for the significant-weather radar overlay on the live
+    // and kiosk maps (client-rendered from RainViewer tiles). On by default;
+    // admins can switch it off in club settings.
+    id: 11,
+    sql: `
+ALTER TABLE clubs ADD COLUMN weather_layer INTEGER NOT NULL DEFAULT 1;
+`,
+  },
 ];
 
 export function migrate(db: Database): void {

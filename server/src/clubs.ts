@@ -16,6 +16,7 @@ export interface ClubRow {
   kiosk_token: string;
   kiosk_prefs: string;
   timezone: string;
+  weather_layer: number;
   callsign_rules: string; // JSON [{prefix, spoken}]
   created_at: number;
 }

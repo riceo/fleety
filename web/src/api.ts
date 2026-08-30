@@ -71,6 +71,7 @@ export interface AppConfig {
   callsignRules?: CallsignRule[];
   kioskViewMode?: 'target' | 'overview';
   timezone?: string;
+  weatherLayer?: boolean;
 }
 
 export interface Me {

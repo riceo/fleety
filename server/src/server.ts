@@ -398,6 +398,7 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
       callsignRules: clubs.rules(club),
       kioskViewMode: kioskPrefs(club).viewMode === 'overview' ? 'overview' : 'target',
       timezone: club.timezone,
+      weatherLayer: club.weather_layer === 1,
     };
   });
 
@@ -923,6 +924,7 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
       tile_style_url: isHttpUrl(b.tileStyleUrl) ? String(b.tileStyleUrl) : club.tile_style_url,
       timezone: isValidTimezone(b.timezone) ? String(b.timezone) : club.timezone,
       public_mode: b.publicMode === undefined ? club.public_mode : b.publicMode ? 1 : 0,
+      weather_layer: b.weatherLayer === undefined ? club.weather_layer : b.weatherLayer ? 1 : 0,
       kiosk_prefs: (() => {
         if (b.kioskViewMode === undefined) return club.kiosk_prefs;
         const prefs = kioskPrefs(club);
@@ -948,7 +950,7 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     db.prepare(
       `UPDATE clubs SET name=@name, subheading=@subheading, theme=@theme, accent=@accent, map_center=@map_center,
        map_zoom=@map_zoom, tile_style_url=@tile_style_url, public_mode=@public_mode, callsign_rules=@callsign_rules,
-       kiosk_prefs=@kiosk_prefs, timezone=@timezone
+       kiosk_prefs=@kiosk_prefs, timezone=@timezone, weather_layer=@weather_layer
        WHERE id=@id`
     ).run(next);
     clubs.reload();

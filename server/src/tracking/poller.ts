@@ -526,12 +526,6 @@ export class Poller {
     }
     this.lastPollAt = Date.now();
 
-    // Ambient other-traffic (independent of fleet polling; catches internally,
-    // so the fleet-health flags above stay honest about the fleet feed). The
-    // extra .catch guards the reschedule in the finally below — this await sits
-    // outside both try blocks, and an unguarded throw here would stop the loop.
-    await this.otherTrafficPass().catch(() => {});
-
     // The live fan-out tail must never stop the loop: a throw here (e.g. a
     // write on a half-closed socket) is caught, logged, and the next cycle is
     // still scheduled in the finally.
@@ -540,6 +534,15 @@ export class Poller {
         this.live.setNotes(clubId, notes);
       }
       this.live.refreshStatuses();
+      this.live.flush();
+      // Ambient other-traffic runs AFTER the fleet deltas are on the wire, so
+      // a slow area query (up to its fetch timeout) can never delay a fleet
+      // update reaching the boards. It catches internally (and again here) so
+      // the fleet-health flags stay honest; the second flush ships only the
+      // traffic event and is a no-op when nothing changed. Kept inside this
+      // try/finally so the reschedule below always runs and cycles never
+      // overlap a still-running pass.
+      await this.otherTrafficPass().catch(() => {});
       this.live.flush();
     } catch (tailErr) {
       this.lastPollError = tailErr instanceof Error ? tailErr.message : String(tailErr);

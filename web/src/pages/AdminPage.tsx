@@ -1104,6 +1104,7 @@ interface ClubSettings {
   callsign_rules: string;
   timezone: string;
   weather_layer: number;
+  other_traffic: string;
 }
 
 const THEME_OPTIONS = [
@@ -1112,6 +1113,22 @@ const THEME_OPTIONS = [
   { key: 'heritage', label: 'Heritage — slab-serif, warm tones' },
   { key: 'daylight', label: 'Daylight — the light version' },
 ];
+
+// Basemap presets (openfreemap). "Custom" keeps the raw-URL escape hatch for
+// clubs pointing at their own tile server.
+const MAP_STYLE_OPTIONS = [
+  { url: 'https://tiles.openfreemap.org/styles/dark', label: 'Dark ops — radar-room look (default)' },
+  { url: 'https://tiles.openfreemap.org/styles/liberty', label: 'Standard — green land, blue water' },
+  { url: 'https://tiles.openfreemap.org/styles/bright', label: 'Bright — standard, higher contrast' },
+  { url: 'https://tiles.openfreemap.org/styles/positron', label: 'Minimal light — pale greys' },
+];
+
+interface OtherTrafficForm {
+  enabled: boolean;
+  maxAltFt: number;
+  radiusNm: number;
+  color: string;
+}
 
 // Tolerant parse of the stored callsign_rules JSON — a corrupt or legacy value
 // must never crash the settings page.
@@ -1162,6 +1179,24 @@ export function SettingsAdmin() {
   const publicOn = form.publicMode !== undefined ? !!form.publicMode : club?.public_mode === 1;
   const weatherOn = form.weatherLayer !== undefined ? !!form.weatherLayer : club?.weather_layer === 1;
   const kioskUrl = club ? `${window.location.origin}/kiosk?token=${club.kiosk_token}` : '';
+  const storedOther: Partial<OtherTrafficForm> = (() => {
+    try {
+      return JSON.parse(club?.other_traffic || '{}') as Partial<OtherTrafficForm>;
+    } catch {
+      return {};
+    }
+  })();
+  const ot: OtherTrafficForm = {
+    enabled: false,
+    maxAltFt: 10000,
+    radiusNm: 30,
+    color: '#7d8db5',
+    ...storedOther,
+    ...((form.otherTraffic as Partial<OtherTrafficForm> | undefined) ?? {}),
+  };
+  const setOt = (patch: Partial<OtherTrafficForm>) => setKey('otherTraffic', { ...ot, ...patch });
+  const styleUrl = String(val('tile_style_url', 'tileStyleUrl'));
+  const stylePreset = MAP_STYLE_OPTIONS.some((s) => s.url === styleUrl);
 
   return (
     <div className="settings-page">
@@ -1329,11 +1364,40 @@ export function SettingsAdmin() {
       <section className="setting-block">
         <h3>Map</h3>
         <div className="form-row">
-          <label>
-            Map style URL
-            <input value={String(val('tile_style_url', 'tileStyleUrl'))} onChange={(e) => setKey('tileStyleUrl', e.target.value)} />
+          <label style={{ flex: 1 }}>
+            Map style
+            <select
+              value={stylePreset ? styleUrl : 'custom'}
+              onChange={(e) => {
+                if (e.target.value !== 'custom') setKey('tileStyleUrl', e.target.value);
+                else setKey('tileStyleUrl', '');
+              }}
+            >
+              {MAP_STYLE_OPTIONS.map((s) => (
+                <option key={s.url} value={s.url}>
+                  {s.label}
+                </option>
+              ))}
+              <option value="custom">Custom style URL…</option>
+            </select>
           </label>
         </div>
+        {!stylePreset && (
+          <div className="form-row">
+            <label>
+              Custom style URL
+              <input
+                value={styleUrl}
+                onChange={(e) => setKey('tileStyleUrl', e.target.value)}
+                placeholder="https://…/style.json"
+              />
+            </label>
+          </div>
+        )}
+        <p className="muted small">
+          “Standard” gives the classic look — green land, blue water — if the dark radar style isn’t your
+          club’s thing. Labels adapt automatically.
+        </p>
         <div className="form-row">
           <label>
             Map centre (lat,lon)
@@ -1352,6 +1416,46 @@ export function SettingsAdmin() {
           Overlays moderate-or-stronger precipitation on the live board and kiosk — amber / red / magenta like an
           airborne weather radar, plus ice-blue for snow. Light rain and drizzle are filtered out, so the map stays
           clean until there&rsquo;s weather that matters. Data from RainViewer, refreshed every ~10 minutes.
+        </p>
+        <label className="check">
+          <input type="checkbox" checked={ot.enabled} onChange={(e) => setOt({ enabled: e.target.checked })} />
+          Show other aircraft near the club (non-fleet ADS-B traffic)
+        </label>
+        {ot.enabled && (
+          <div className="form-row">
+            <label>
+              Max altitude (ft)
+              <input
+                type="number"
+                min={500}
+                max={60000}
+                step={500}
+                value={ot.maxAltFt}
+                onChange={(e) => setOt({ maxAltFt: Number(e.target.value) })}
+                style={{ width: '7rem' }}
+              />
+            </label>
+            <label>
+              Radius (nm)
+              <input
+                type="number"
+                min={5}
+                max={100}
+                step={5}
+                value={ot.radiusNm}
+                onChange={(e) => setOt({ radiusNm: Number(e.target.value) })}
+                style={{ width: '6rem' }}
+              />
+            </label>
+            <label>
+              Colour
+              <input type="color" value={ot.color} onChange={(e) => setOt({ color: e.target.value })} />
+            </label>
+          </div>
+        )}
+        <p className="muted small">
+          Non-fleet traffic appears as small faded icons in one colour, under the fleet — unmistakably
+          background. The altitude ceiling keeps high airway traffic off a circuit-height board.
         </p>
       </section>
 

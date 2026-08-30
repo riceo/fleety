@@ -103,6 +103,21 @@ export interface NormPresence {
   source: string;
 }
 
+// A non-fleet aircraft near the club — ambient context on the board when the
+// club enables it. Live-only: never persisted, never part of flight history.
+export interface OtherAircraft {
+  hex: string;
+  ts: number; // ms epoch, position time (poll time - seen_pos)
+  lat: number;
+  lon: number;
+  alt: number | null; // ft, baro preferred (geom fallback)
+  gs: number | null; // kt
+  track: number | null; // deg true
+  callsign: string | null;
+  reg: string | null;
+  type: string | null; // ICAO type code, e.g. C172
+}
+
 export type AircraftStatus = 'airborne' | 'ground' | 'awake' | 'offline';
 
 export interface LiveAircraft {

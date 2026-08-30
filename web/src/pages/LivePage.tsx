@@ -130,6 +130,7 @@ export function LivePage() {
             ref={mapRef}
             config={config}
             fleet={live.fleet}
+            others={live.others}
             selectedId={selectedId}
             onSelect={select}
             followId={following ? selectedId : null}

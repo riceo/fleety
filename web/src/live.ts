@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { LiveAircraft, LiveDelta } from './api';
+import type { LiveAircraft, LiveDelta, OtherTraffic } from './api';
 
 export interface LiveTickerEvent {
   ts: number;
@@ -10,6 +10,7 @@ export interface LiveTickerEvent {
 
 export interface LiveState {
   fleet: LiveAircraft[];
+  others: OtherTraffic[]; // ambient non-fleet traffic (empty unless the club enables it)
   connected: boolean;
   lastEventAt: number;
   denied: boolean; // stream rejected (needs login)
@@ -20,6 +21,7 @@ export interface LiveState {
 // after; EventSource handles reconnection itself.
 export function useLiveFleet(enabled: boolean): LiveState {
   const [fleet, setFleet] = useState<LiveAircraft[]>([]);
+  const [others, setOthers] = useState<OtherTraffic[]>([]);
   const [connected, setConnected] = useState(false);
   const [denied, setDenied] = useState(false);
   const [tickerEvent, setTickerEvent] = useState<LiveTickerEvent | null>(null);
@@ -98,6 +100,18 @@ export function useLiveFleet(enabled: boolean): LiveState {
       }
     });
 
+    // Ambient traffic: the server replaces the whole list (on change and on
+    // every connect), so this is a plain overwrite — including to empty.
+    es.addEventListener('traffic', (ev) => {
+      try {
+        const data = JSON.parse((ev as MessageEvent).data) as { aircraft: OtherTraffic[] };
+        setOthers(Array.isArray(data.aircraft) ? data.aircraft : []);
+        lastEventAt.current = Date.now();
+      } catch {
+        /* malformed event */
+      }
+    });
+
     es.addEventListener('ticker', (ev) => {
       try {
         const data = JSON.parse((ev as MessageEvent).data) as { ts: number; text: string; aircraftId: number | null };
@@ -129,5 +143,5 @@ export function useLiveFleet(enabled: boolean): LiveState {
     };
   }, [enabled]);
 
-  return { fleet, connected, lastEventAt: lastEventAt.current, denied, tickerEvent };
+  return { fleet, others, connected, lastEventAt: lastEventAt.current, denied, tickerEvent };
 }

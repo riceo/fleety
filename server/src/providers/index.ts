@@ -1,4 +1,4 @@
-import type { NormPosition, NormPresence } from '../types.js';
+import type { NormPosition, NormPresence, OtherAircraft } from '../types.js';
 
 export interface ProviderStates {
   positions: NormPosition[];
@@ -14,6 +14,9 @@ export interface AdsbProvider {
   // transponder sightings ("awake"). Throws on transport/HTTP errors (the
   // poller handles backoff and failover).
   fetchStates(hexes: string[]): Promise<ProviderStates>;
+  // Optional: every airborne aircraft within radiusNm of a point, for the
+  // ambient other-traffic layer. Throws like fetchStates.
+  fetchArea?(lat: number, lon: number, radiusNm: number): Promise<OtherAircraft[]>;
 }
 
 export class ProviderHttpError extends Error {

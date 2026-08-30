@@ -37,8 +37,9 @@ server/src/
   escape.ts            escapeHtml / escapeXml — the ONLY escapers (don't re-implement)
   live/liveBus.ts      SSE fan-out: per-club channels, snapshot/delta, ring+resume, audience filtering
   tracking/
-    poller.ts          the one shared poll loop (all clubs) + the ADSBx rescue tier
+    poller.ts          the one shared poll loop (all clubs) + the ADSBx rescue tier + other-traffic pass
     flightDetector.ts  per-aircraft GROUND/AIRBORNE/LOST state machine, airfield geofences
+    otherTraffic.ts    policy filter for the ambient non-fleet traffic layer (own-hex/ceiling/cap)
     flightStats.ts, geo.ts
   providers/           adsbLol (primary), adsbFi (failover), adsbx (paid rescue), readsb (shared normalise)
   db/                  index.ts (open + WAL + FK), migrations.ts (additive-only), seed.ts
@@ -61,7 +62,7 @@ header. Then the route runs.
 
 ## Load-bearing invariants — DO NOT BREAK THESE
 
-- **Migrations are additive-only and idempotent** (`db/migrations.ts`, numbered `id`s, currently 10).
+- **Migrations are additive-only and idempotent** (`db/migrations.ts`, numbered `id`s, currently 12).
   During a rolling deploy the old and new containers run against the same DB, so a migration must
   never drop/rename/narrow a column the old code reads. Add columns/tables; backfill in code. Same
   rule for the SSE delta shape and any stored JSON blob.
@@ -101,6 +102,15 @@ header. Then the route runs.
   and has a **per-account lockout** (8 fails/15min, IP-independent). Rate limits key on
   `CF-Connecting-IP` when present. Behind Cloudflare set `TRUST_PROXY=2` (and ideally lock the origin
   to Cloudflare IPs) or IP limits key on a shared proxy address.
+- **Other traffic (`clubs.other_traffic` JSON, off by default):** the poller runs a per-club area query
+  (`fetchArea`, adsb.lol then adsb.fi) around the club's map centre — throttled to 10s/club, skipped with
+  zero SSE clients, capped at 80 nearest, own hexes and above-ceiling traffic filtered
+  (`tracking/otherTraffic.ts`). Live-only: fans out as the SSE `traffic` event (whole-list replace, re-sent
+  on connect, no ring/resume) and is never stored. The map draws it under the fleet: one shared tinted icon,
+  faded + small. A traffic failure must never mark the fleet poll unhealthy or throw into the cycle.
+- **Map staleness:** airborne aircraft stay on the map through coverage gaps (24h cap); non-airborne
+  drop off 10 min after the transponder goes quiet (`GHOST_MAX_AGE_MS` — board feedback: landed aircraft
+  used to sit there all day). The strip bay/kiosk rail still lists them (dimmed hard when offline).
 - **Providers:** `providers[0]` = primary (adsb.lol), `providers[1]` = failover (adsb.fi, queried only
   for hexes the primary didn't freshly hear). The **ADSBx rescue tier** is opt-in (`ADSBX_API_KEY`),
   metered (per-UTC-month budget persisted in settings), and fires only for an OPEN flight that vanished

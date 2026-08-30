@@ -26,7 +26,7 @@ function BoardCard({ a, focused }: { a: LiveAircraft; focused: boolean }) {
   const airborne = a.status === 'airborne';
   return (
     <div
-      className={`board-card${focused ? ' focused' : ''}${airborne ? ' airborne' : ''}${isSparkly(a) ? ' sparkle' : ''}`}
+      className={`board-card${focused ? ' focused' : ''}${airborne ? ' airborne' : ''}${a.status === 'offline' ? ' offline' : ''}${isSparkly(a) ? ' sparkle' : ''}`}
       style={{ ['--strip-color' as string]: a.color }}
     >
       {a.photoUrl && <div className="board-card-photo" style={{ backgroundImage: `url(${a.photoUrl})` }} />}
@@ -286,7 +286,7 @@ export function KioskPage() {
           <div className="kiosk-map">
             {/* followId keeps the camera glued to the focused aircraft (with
                 dead-reckoned easing), not just a one-shot fly-to. */}
-            <MapView ref={mapRef} config={config} fleet={live.fleet} followId={viewMode === 'target' ? (focused?.id ?? null) : null} kiosk />
+            <MapView ref={mapRef} config={config} fleet={live.fleet} others={live.others} followId={viewMode === 'target' ? (focused?.id ?? null) : null} kiosk />
             <div className="radar-sweep" aria-hidden />
           </div>
         ) : (

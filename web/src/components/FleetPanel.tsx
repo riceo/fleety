@@ -27,7 +27,7 @@ export function FlightStrip({
   const airborne = a.status === 'airborne';
   return (
     <button
-      className={`strip${airborne ? ' strip-air' : ''}${selected ? ' selected' : ''}${isSparkly(a) ? ' sparkle' : ''}`}
+      className={`strip${airborne ? ' strip-air' : ''}${a.status === 'offline' ? ' strip-offline' : ''}${selected ? ' selected' : ''}${isSparkly(a) ? ' sparkle' : ''}`}
       style={{ ['--strip-color' as string]: a.color }}
       onClick={onClick}
       aria-label={`${a.registration} ${a.nickname || a.typeName}, ${a.status}`}

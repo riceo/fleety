@@ -1,5 +1,5 @@
 import type { ServerResponse } from 'node:http';
-import type { AircraftRow, LiveAircraft, NormPosition } from '../types.js';
+import type { AircraftRow, LiveAircraft, NormPosition, OtherAircraft } from '../types.js';
 
 const TRAIL_MAX_POINTS = 1500;
 const AIRBORNE_FRESH_MS = 5 * 60_000;
@@ -53,6 +53,10 @@ class ClubChannel {
   awakeEmitted = new Map<number, number>(); // last awakeTs actually sent to clients
   // Trails to restore on boot, held until the roster sync creates the aircraft.
   pendingSeeds = new Map<number, { flightId: number; points: [number, number][] }>();
+  // Ambient non-fleet traffic, replaced wholesale each update. Not part of the
+  // ring/resume machinery — every (re)connect gets the current list instead.
+  othersPayload = '{"aircraft":[]}';
+  othersDirty = false;
 }
 
 export class LiveBus {
@@ -358,6 +362,17 @@ export class LiveBus {
     return JSON.stringify({ aircraft: changes, removed });
   }
 
+  // Ambient non-fleet traffic near the club — context, not history. Same list
+  // for both audiences (it's public ADS-B data, gated only by the club's own
+  // setting). The unchanged-payload check keeps quiet skies quiet on the wire.
+  setOtherTraffic(clubId: number, list: OtherAircraft[]): void {
+    const ch = this.channel(clubId);
+    const payload = JSON.stringify({ aircraft: list });
+    if (payload === ch.othersPayload) return;
+    ch.othersPayload = payload;
+    ch.othersDirty = true;
+  }
+
   flush(): void {
     for (const [clubId, ch] of this.channels) {
       if (ch.dirty.size === 0 && ch.removed.size === 0 && ch.hiddenFromRestricted.size === 0) continue;
@@ -379,6 +394,13 @@ export class LiveBus {
         if (payload !== '{"aircraft":[],"removed":[]}') {
           this.safeWrite(c, `event: delta\nid: ${this.bootId}.${ev.id}\ndata: ${payload}\n\n`);
         }
+      }
+    }
+    for (const [clubId, ch] of this.channels) {
+      if (!ch.othersDirty) continue;
+      ch.othersDirty = false;
+      for (const c of [...this.clients.values()]) {
+        if (c.clubId === clubId) this.safeWrite(c, `event: traffic\ndata: ${ch.othersPayload}\n\n`);
       }
     }
   }
@@ -420,6 +442,11 @@ export class LiveBus {
       const lastId = ch.ring.length ? ch.ring[ch.ring.length - 1].id : 0;
       this.safeWrite(this.clients.get(id)!, `event: snapshot\nid: ${this.bootId}.${lastId}\ndata: ${this.snapshotPayload(clubId, audience)}\n\n`);
     }
+    // Current ambient traffic, sent even when empty — for a client that
+    // reconnected after the club switched the layer off, the empty list IS the
+    // news. (Re-fetch the client: an earlier failed write may have dropped it.)
+    const client = this.clients.get(id);
+    if (client) this.safeWrite(client, `event: traffic\ndata: ${ch.othersPayload}\n\n`);
     return id;
   }
 

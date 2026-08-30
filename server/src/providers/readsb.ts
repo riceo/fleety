@@ -1,10 +1,12 @@
-import type { NormPosition, NormPresence } from '../types.js';
+import type { NormPosition, NormPresence, OtherAircraft } from '../types.js';
 
 // readsb-style aircraft record as served by the adsb.lol / adsb.fi family of
 // aggregator APIs (and a local tar1090). Both providers share this shape.
 export interface ReadsbAircraft {
   hex?: string;
   flight?: string;
+  r?: string; // registration, as enriched by the aggregator
+  t?: string; // ICAO type code (C172, PA28…)
   alt_baro?: number | 'ground';
   alt_geom?: number;
   gs?: number;
@@ -80,5 +82,26 @@ export function normalizePresence(ac: ReadsbAircraft, pollTime: number, source: 
     squawk: ac.squawk ?? null,
     onGround: ac.alt_baro === 'ground' ? true : null,
     source,
+  };
+}
+
+// Area-query record -> the ambient other-traffic shape. Surface targets and
+// position-less records return null — "other traffic" means aircraft moving
+// through the club's sky, not metal parked on an apron.
+export function normalizeOther(ac: ReadsbAircraft, pollTime: number): OtherAircraft | null {
+  if (!ac.hex || typeof ac.lat !== 'number' || typeof ac.lon !== 'number') return null;
+  if (ac.alt_baro === 'ground') return null;
+  const seenPos = typeof ac.seen_pos === 'number' ? ac.seen_pos : typeof ac.seen === 'number' ? ac.seen : 0;
+  return {
+    hex: ac.hex.toLowerCase(),
+    ts: Math.round(pollTime - seenPos * 1000),
+    lat: ac.lat,
+    lon: ac.lon,
+    alt: num(ac.alt_baro) ?? num(ac.alt_geom),
+    gs: num(ac.gs),
+    track: num(ac.track),
+    callsign: ac.flight?.trim() || null,
+    reg: ac.r?.trim() || null,
+    type: ac.t?.trim() || null,
   };
 }

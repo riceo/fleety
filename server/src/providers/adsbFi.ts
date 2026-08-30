@@ -1,6 +1,7 @@
 import { config } from '../config.js';
+import type { OtherAircraft } from '../types.js';
 import { AdsbProvider, ProviderHttpError, type ProviderStates } from './index.js';
-import { normalizePresence, normalizeReadsb, type ReadsbAircraft } from './readsb.js';
+import { normalizeOther, normalizePresence, normalizeReadsb, type ReadsbAircraft } from './readsb.js';
 
 // Failover aggregator — same readsb response shape, different feeder network,
 // so it sometimes hears aircraft adsb.lol can't. Polite budget: the poller
@@ -28,5 +29,23 @@ export class AdsbFiProvider implements AdsbProvider {
       if (pres) out.presences.push(pres);
     }
     return out;
+  }
+
+  // Area failover for the ambient other-traffic layer (same shape as adsb.lol,
+  // different URL scheme).
+  async fetchArea(lat: number, lon: number, radiusNm: number): Promise<OtherAircraft[]> {
+    const url = `${this.base}/v2/lat/${lat.toFixed(4)}/lon/${lon.toFixed(4)}/dist/${Math.round(radiusNm)}`;
+    const res = await fetch(url, {
+      headers: { 'User-Agent': config.userAgent, Accept: 'application/json' },
+      signal: AbortSignal.timeout(6000),
+    });
+    if (!res.ok) throw new ProviderHttpError(res.status, `adsb.fi responded ${res.status}`);
+    // adsb.fi's area endpoint keys the list "aircraft" (its hex endpoint says
+    // "ac") — accept both.
+    const body = (await res.json()) as { ac?: ReadsbAircraft[]; aircraft?: ReadsbAircraft[] };
+    const pollTime = Date.now();
+    return (body.aircraft ?? body.ac ?? [])
+      .map((ac) => normalizeOther(ac, pollTime))
+      .filter((t): t is OtherAircraft => t !== null);
   }
 }

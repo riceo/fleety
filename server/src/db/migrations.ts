@@ -324,6 +324,15 @@ CREATE INDEX IF NOT EXISTS idx_positions_raw ON positions(ts) WHERE raw IS NOT N
 ALTER TABLE clubs ADD COLUMN weather_layer INTEGER NOT NULL DEFAULT 1;
 `,
   },
+  {
+    // Per-club "other traffic" prefs: show non-fleet ADS-B traffic near the
+    // club as faded context icons on the live/kiosk map. One JSON blob (like
+    // kiosk_prefs) so future knobs don't each need a migration.
+    id: 12,
+    sql: `
+ALTER TABLE clubs ADD COLUMN other_traffic TEXT NOT NULL DEFAULT '{}';
+`,
+  },
 ];
 
 export function migrate(db: Database): void {

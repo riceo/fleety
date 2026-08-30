@@ -38,6 +38,22 @@ export interface LiveAircraft {
   trail: [number, number][];
 }
 
+// Non-fleet aircraft near the club (the ambient "other traffic" layer),
+// mirroring the server's OtherAircraft. Live-only — no history, no identity
+// beyond what the aggregator transmits.
+export interface OtherTraffic {
+  hex: string;
+  ts: number;
+  lat: number;
+  lon: number;
+  alt: number | null;
+  gs: number | null;
+  track: number | null;
+  callsign: string | null;
+  reg: string | null;
+  type: string | null;
+}
+
 export interface TickerItem {
   ts: number;
   text: string;
@@ -72,6 +88,7 @@ export interface AppConfig {
   kioskViewMode?: 'target' | 'overview';
   timezone?: string;
   weatherLayer?: boolean;
+  otherTraffic?: { enabled: boolean; color: string; maxAltFt: number };
 }
 
 export interface Me {

@@ -329,3 +329,53 @@ describe('club settings', () => {
     expect((await cfg()).json().weatherLayer).toBe(false);
   });
 });
+
+describe('club settings: other traffic', () => {
+  let w: World;
+  beforeEach(async () => {
+    w = await build();
+  });
+  afterEach(async () => {
+    await w.app.close();
+  });
+
+  it('defaults off, round-trips through admin settings, and reaches /api/config', async () => {
+    const cfg = async () =>
+      (await w.app.inject({ method: 'GET', url: '/api/config', headers: H('alpha.fleety.live') })).json() as {
+        otherTraffic: { enabled: boolean; color: string; maxAltFt: number };
+      };
+    expect((await cfg()).otherTraffic).toEqual({ enabled: false, color: '#7d8db5', maxAltFt: 10000 });
+
+    const on = await w.app.inject({
+      method: 'PUT',
+      url: '/api/admin/settings',
+      headers: H('alpha.fleety.live', w.adminACookie),
+      payload: { otherTraffic: { enabled: true, maxAltFt: 8000, radiusNm: 40, color: '#22ccff' } },
+    });
+    expect(on.statusCode).toBe(200);
+    const stored = JSON.parse((on.json() as { club: { other_traffic: string } }).club.other_traffic);
+    expect(stored).toEqual({ enabled: true, maxAltFt: 8000, radiusNm: 40, color: '#22ccff' });
+    expect((await cfg()).otherTraffic).toEqual({ enabled: true, color: '#22ccff', maxAltFt: 8000 });
+
+    // A save that doesn't mention the field leaves it alone.
+    await w.app.inject({
+      method: 'PUT',
+      url: '/api/admin/settings',
+      headers: H('alpha.fleety.live', w.adminACookie),
+      payload: { name: 'ALPHA AERO' },
+    });
+    expect((await cfg()).otherTraffic.enabled).toBe(true);
+  });
+
+  it('clamps out-of-range numbers and rejects a non-hex colour', async () => {
+    const r = await w.app.inject({
+      method: 'PUT',
+      url: '/api/admin/settings',
+      headers: H('alpha.fleety.live', w.adminACookie),
+      payload: { otherTraffic: { enabled: true, maxAltFt: 999999, radiusNm: 1, color: 'url(javascript:x)' } },
+    });
+    expect(r.statusCode).toBe(200);
+    const stored = JSON.parse((r.json() as { club: { other_traffic: string } }).club.other_traffic);
+    expect(stored).toEqual({ enabled: true, maxAltFt: 60000, radiusNm: 5, color: '#7d8db5' });
+  });
+});

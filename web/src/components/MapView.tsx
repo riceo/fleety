@@ -1,13 +1,39 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import { api, type AppConfig, type LiveAircraft } from '../api';
+import { api, type AppConfig, type LiveAircraft, type OtherTraffic } from '../api';
 import { renderIcon, renderRoundel } from '../icons';
 import { isSparkly } from '../sparkle';
 import { displayCallsign } from '../format';
 import { attachWeather } from '../weather';
 
 const CLUB_BLUE = '#5b6bc4';
+
+// Label palette per basemap flavour. The board shipped dark-first; the
+// "standard" (light) styles need dark ink on a light halo or every label
+// washes out. Heuristic on the style URL — custom styles without "dark" in
+// the name get the light palette, which stays readable on dark tiles too.
+function isLightStyle(styleUrl: string | undefined): boolean {
+  return !!styleUrl && !/dark|night|fiord/i.test(styleUrl);
+}
+const palette = (light: boolean) =>
+  light
+    ? {
+        ink: '#1d2740',
+        halo: 'rgba(255,255,255,0.92)',
+        euLabel: '#5f6f94',
+        euHalo: 'rgba(255,255,255,0.85)',
+        clubLabel: '#4a5aa8',
+        otherLabel: '#5f6f94',
+      }
+    : {
+        ink: '#eef2fb',
+        halo: 'rgba(5,8,16,0.9)',
+        euLabel: '#7787ad',
+        euHalo: 'rgba(5,8,16,0.85)',
+        clubLabel: '#93a4de',
+        otherLabel: '#8b98b8',
+      };
 
 type EuAirport = [ident: string, name: string, lat: number, lon: number, kind: number];
 
@@ -23,7 +49,13 @@ interface ClubAirfield {
 // Airfield layers: the full European dataset fades in with zoom; the club's
 // own airfields are always-on branded markers, with Rochester/Lydd (bases)
 // most prominent.
-function addAirfieldLayers(map: maplibregl.Map, accent: string, onBases?: (bases: ClubAirfield[]) => void): void {
+function addAirfieldLayers(
+  map: maplibregl.Map,
+  accent: string,
+  light: boolean,
+  onBases?: (bases: ClubAirfield[]) => void
+): void {
+  const pal = palette(light);
   map.addImage('af-base', renderRoundel(17, accent, '#ffffff', '#ffffff'), { pixelRatio: 2 });
   map.addImage('af-club', renderRoundel(12, CLUB_BLUE, '#ffffff', '#ffffff'), { pixelRatio: 2 });
 
@@ -72,8 +104,8 @@ function addAirfieldLayers(map: maplibregl.Map, accent: string, onBases?: (bases
       'text-max-width': 8,
     },
     paint: {
-      'text-color': '#7787ad',
-      'text-halo-color': 'rgba(5,8,16,0.85)',
+      'text-color': pal.euLabel,
+      'text-halo-color': pal.euHalo,
       'text-halo-width': 1.4,
     },
   });
@@ -106,8 +138,8 @@ function addAirfieldLayers(map: maplibregl.Map, accent: string, onBases?: (bases
       'text-max-width': 9,
     },
     paint: {
-      'text-color': ['case', ['==', ['get', 'isBase'], 1], accent, '#93a4de'],
-      'text-halo-color': 'rgba(5,8,16,0.9)',
+      'text-color': ['case', ['==', ['get', 'isBase'], 1], accent, pal.clubLabel],
+      'text-halo-color': pal.halo,
       'text-halo-width': 1.6,
     },
   });
@@ -155,14 +187,26 @@ export interface MapViewHandle {
 interface Props {
   config: AppConfig;
   fleet: LiveAircraft[];
+  others?: OtherTraffic[]; // ambient non-fleet traffic (club setting)
   selectedId?: number | null;
   onSelect?: (id: number | null) => void;
   followId?: number | null;
   kiosk?: boolean;
 }
 
-// How stale a fix can be and still appear on the map at all.
+// How stale a fix can be and still appear on the map at all (airborne — an
+// open flight through a coverage gap must stay up).
 const MAP_MAX_AGE_MS = 24 * 3600 * 1000;
+// Non-airborne aircraft leave the map once the transponder has been quiet this
+// long (board feedback: landed aircraft hung around all day). While it keeps
+// transmitting on the ground it stays — that's live "someone's at the plane".
+const GHOST_MAX_AGE_MS = 10 * 60_000;
+// Ambient traffic ages out fast — it refreshes every few seconds when the
+// feed is healthy, so anything older is a vanished target, not context.
+const OTHER_MAX_AGE_MS = 2 * 60_000;
+
+const onMap = (a: LiveAircraft, now: number): boolean =>
+  !!a.pos && now - a.pos.ts < (a.status === 'airborne' ? MAP_MAX_AGE_MS : GHOST_MAX_AGE_MS);
 
 // Dead reckoning: between pings an airborne aircraft glides along its last
 // track at its last groundspeed, so motion is continuous instead of stepping
@@ -170,16 +214,27 @@ const MAP_MAX_AGE_MS = 24 * 3600 * 1000;
 // fabricate a position through a real coverage gap.
 const DEAD_RECKON_MAX_MS = 60_000;
 
+function deadReckonFrom(lat: number, lon: number, gs: number, track: number, ageMs: number): [number, number] {
+  const distNm = (gs * Math.min(ageMs, DEAD_RECKON_MAX_MS)) / 3_600_000;
+  const rad = (track * Math.PI) / 180;
+  const outLat = lat + (distNm * Math.cos(rad)) / 60;
+  const outLon = lon + (distNm * Math.sin(rad)) / (60 * Math.cos((lat * Math.PI) / 180));
+  return [outLon, outLat];
+}
+
 function projectedCoords(a: LiveAircraft, now: number): [number, number] {
   const p = a.pos!;
   if (a.status !== 'airborne' || p.gs == null || p.gs < 30 || p.track == null) return [p.lon, p.lat];
   const ageMs = now - p.ts;
   if (ageMs <= 0) return [p.lon, p.lat];
-  const distNm = (p.gs * Math.min(ageMs, DEAD_RECKON_MAX_MS)) / 3_600_000;
-  const rad = (p.track * Math.PI) / 180;
-  const lat = p.lat + (distNm * Math.cos(rad)) / 60;
-  const lon = p.lon + (distNm * Math.sin(rad)) / (60 * Math.cos((p.lat * Math.PI) / 180));
-  return [lon, lat];
+  return deadReckonFrom(p.lat, p.lon, p.gs, p.track, ageMs);
+}
+
+function projectedOtherCoords(t: OtherTraffic, now: number): [number, number] {
+  if (t.gs == null || t.gs < 30 || t.track == null) return [t.lon, t.lat];
+  const ageMs = now - t.ts;
+  if (ageMs <= 0) return [t.lon, t.lat];
+  return deadReckonFrom(t.lat, t.lon, t.gs, t.track, ageMs);
 }
 
 // The fleet's "local cluster" for auto-fit: aircraft within this of the map
@@ -187,7 +242,7 @@ function projectedCoords(a: LiveAircraft, now: number): [number, number] {
 const CLUSTER_RADIUS_DEG = 3;
 
 export const MapView = forwardRef<MapViewHandle, Props>(function MapView(
-  { config, fleet, selectedId, onSelect, followId, kiosk },
+  { config, fleet, others, selectedId, onSelect, followId, kiosk },
   ref
 ) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -195,6 +250,11 @@ export const MapView = forwardRef<MapViewHandle, Props>(function MapView(
   const readyRef = useRef(false);
   const fleetRef = useRef(fleet);
   fleetRef.current = fleet;
+  const othersRef = useRef<OtherTraffic[]>(others ?? []);
+  othersRef.current = others ?? [];
+  // Hold ambient icons off the map until their shared image has loaded, so
+  // MapLibre doesn't log a missing-image error per frame.
+  const othersIconReadyRef = useRef(false);
   const basesRef = useRef<ClubAirfield[]>([]);
   // An overview fit requested before the airfields fetch resolves would frame
   // aircraft only — remember and re-fit once the bases arrive.
@@ -208,8 +268,8 @@ export const MapView = forwardRef<MapViewHandle, Props>(function MapView(
     const b = new maplibregl.LngLatBounds();
     let any = false;
     for (const a of fleetRef.current) {
-      if (a.pos && now - a.pos.ts < MAP_MAX_AGE_MS) {
-        b.extend([a.pos.lon, a.pos.lat]);
+      if (onMap(a, now)) {
+        b.extend([a.pos!.lon, a.pos!.lat]);
         any = true;
       }
     }
@@ -230,6 +290,9 @@ export const MapView = forwardRef<MapViewHandle, Props>(function MapView(
   const iconSigs = useRef(new Map<number, string>());
 
   const [centerLat, centerLon] = (config.mapCenter ?? '51.3519,0.5033').split(',').map(Number);
+  const lightMap = isLightStyle(config.tileStyleUrl);
+  const pal = palette(lightMap);
+  const othersColor = config.otherTraffic?.color ?? '#7d8db5';
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -258,7 +321,7 @@ export const MapView = forwardRef<MapViewHandle, Props>(function MapView(
     // follow mode gliding with the projection.
     const drTick = setInterval(() => {
       if (!readyRef.current || !mapRef.current) return;
-      if (!fleetRef.current.some((a) => a.status === 'airborne')) return;
+      if (!fleetRef.current.some((a) => a.status === 'airborne') && othersRef.current.length === 0) return;
       syncDataRef.current();
       const fid = followRef.current;
       if (fid) {
@@ -271,12 +334,40 @@ export const MapView = forwardRef<MapViewHandle, Props>(function MapView(
 
     let detachWeather: (() => void) | undefined;
     map.on('load', () => {
-      addAirfieldLayers(map, config.accent ?? '#e32636', (bases) => {
+      addAirfieldLayers(map, config.accent ?? '#e32636', lightMap, (bases) => {
         basesRef.current = bases;
         if (overviewPendingRef.current) {
           overviewPendingRef.current = false;
           fitOverview();
         }
+      });
+      // Ambient other traffic: one shared tinted icon, faded and small, added
+      // below the trails/fleet layers so club aircraft always win visually.
+      map.addSource('others', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+      map.addLayer({
+        id: 'others-icons',
+        type: 'symbol',
+        source: 'others',
+        layout: {
+          'icon-image': 'other-ac',
+          'icon-size': 0.3,
+          'icon-rotate': ['get', 'rotation'],
+          'icon-rotation-alignment': 'map',
+          'icon-allow-overlap': true,
+          'text-field': ['get', 'label'],
+          'text-size': 9.5,
+          'text-offset': [0, 1.4],
+          'text-anchor': 'top',
+          'text-optional': true,
+          'text-font': ['Noto Sans Regular'],
+        },
+        paint: {
+          'icon-opacity': 0.55,
+          'text-color': pal.otherLabel,
+          'text-opacity': 0.8,
+          'text-halo-color': pal.halo,
+          'text-halo-width': 1.1,
+        },
       });
       map.addSource('trails', {
         type: 'geojson',
@@ -368,8 +459,8 @@ export const MapView = forwardRef<MapViewHandle, Props>(function MapView(
           'text-font': ['Noto Sans Bold'],
         },
         paint: {
-          'text-color': '#eef2fb',
-          'text-halo-color': 'rgba(5,8,16,0.9)',
+          'text-color': pal.ink,
+          'text-halo-color': pal.halo,
           'text-halo-width': 1.8,
           'icon-opacity': ['case', ['get', 'ghost'], 0.55, 1],
         },
@@ -388,6 +479,15 @@ export const MapView = forwardRef<MapViewHandle, Props>(function MapView(
       map.on('mouseenter', 'aircraft-icons', () => (map.getCanvas().style.cursor = 'pointer'));
       map.on('mouseleave', 'aircraft-icons', () => (map.getCanvas().style.cursor = ''));
       readyRef.current = true;
+      void renderIcon('low-wing', null, othersColor)
+        .then((img) => {
+          if (!mapRef.current || !readyRef.current) return;
+          if (mapRef.current.hasImage('other-ac')) mapRef.current.removeImage('other-ac');
+          mapRef.current.addImage('other-ac', img, { pixelRatio: 2 });
+          othersIconReadyRef.current = true;
+          syncDataRef.current();
+        })
+        .catch(() => {});
       syncData();
       // Significant-weather radar (per-club admin toggle). Slots itself under
       // the base style's labels; all board layers stay above it.
@@ -397,6 +497,7 @@ export const MapView = forwardRef<MapViewHandle, Props>(function MapView(
     return () => {
       readyRef.current = false;
       detachWeather?.();
+      othersIconReadyRef.current = false; // map.remove() drops its images
       clearInterval(drTick);
       ro.disconnect();
       map.remove();
@@ -429,7 +530,7 @@ export const MapView = forwardRef<MapViewHandle, Props>(function MapView(
     }
 
     const points = current
-      .filter((a) => a.pos && now - a.pos.ts < MAP_MAX_AGE_MS)
+      .filter((a) => onMap(a, now))
       .map((a) => {
         const sparkle = isSparkly(a);
         // Airborne label prefers the transmitted callsign, then the admin
@@ -467,13 +568,42 @@ export const MapView = forwardRef<MapViewHandle, Props>(function MapView(
       type: 'FeatureCollection',
       features: trails,
     });
+    const otherPoints = (othersIconReadyRef.current ? othersRef.current : [])
+      .filter((t) => now - t.ts < OTHER_MAX_AGE_MS)
+      .map((t) => ({
+        type: 'Feature' as const,
+        geometry: { type: 'Point' as const, coordinates: projectedOtherCoords(t, now) },
+        properties: {
+          rotation: t.track ?? 0,
+          label: (t.callsign ?? t.reg ?? '').trim(),
+        },
+      }));
+    (map.getSource('others') as maplibregl.GeoJSONSource | undefined)?.setData({
+      type: 'FeatureCollection',
+      features: otherPoints,
+    });
   };
 
   // The dead-reckoning tick calls syncData through this ref — reassigned every
   // render so it always sees the current fleet/selection closures.
   syncDataRef.current = syncData;
 
-  useEffect(syncData, [fleet, selectedId]);
+  useEffect(syncData, [fleet, others, selectedId]);
+
+  // Re-tint the shared ambient-traffic icon if the admin changes its colour
+  // while a board is running (kiosks refresh config every few minutes).
+  useEffect(() => {
+    if (!mapRef.current || !readyRef.current) return;
+    void renderIcon('low-wing', null, othersColor)
+      .then((img) => {
+        if (!mapRef.current || !readyRef.current) return;
+        if (mapRef.current.hasImage('other-ac')) mapRef.current.removeImage('other-ac');
+        mapRef.current.addImage('other-ac', img, { pixelRatio: 2 });
+        othersIconReadyRef.current = true;
+        syncDataRef.current();
+      })
+      .catch(() => {});
+  }, [othersColor]);
 
   // Follow mode: gently track the selected aircraft.
   useEffect(() => {
@@ -500,10 +630,9 @@ export const MapView = forwardRef<MapViewHandle, Props>(function MapView(
       // a continent view.
       const local = fleetRef.current.filter(
         (a) =>
-          a.pos &&
-          now - a.pos.ts < MAP_MAX_AGE_MS &&
-          Math.abs(a.pos.lat - centerLat) < CLUSTER_RADIUS_DEG &&
-          Math.abs(a.pos.lon - centerLon) < CLUSTER_RADIUS_DEG
+          onMap(a, now) &&
+          Math.abs(a.pos!.lat - centerLat) < CLUSTER_RADIUS_DEG &&
+          Math.abs(a.pos!.lon - centerLon) < CLUSTER_RADIUS_DEG
       );
       if (local.length === 0) return;
       const b = new maplibregl.LngLatBounds();
@@ -539,7 +668,7 @@ export const MapView = forwardRef<MapViewHandle, Props>(function MapView(
       // the frame — a day-old parked position or a stale garbage fix must not
       // blow the zoom out to a continent. A real far-flying jet still counts.
       for (const a of fleetRef.current) {
-        if (a.status === 'airborne' && a.pos && now - a.pos.ts < MAP_MAX_AGE_MS) consider(a.pos.lon, a.pos.lat);
+        if (a.status === 'airborne' && onMap(a, now)) consider(a.pos!.lon, a.pos!.lat);
       }
       consider(cx, cy); // the focus itself is always in-frame
       for (const base of basesRef.current) consider(base.lon, base.lat);

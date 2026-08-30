@@ -2,8 +2,10 @@ import type { Database } from 'better-sqlite3';
 import type { AdsbProvider, ProviderStates } from '../providers/index.js';
 import type { Settings } from '../settings.js';
 import type { LiveBus } from '../live/liveBus.js';
-import type { AircraftRow, NormPosition } from '../types.js';
+import type { AircraftRow, NormPosition, OtherAircraft } from '../types.js';
+import { otherTrafficPrefs } from '../clubs.js';
 import { FlightDetector } from './flightDetector.js';
+import { filterOtherTraffic } from './otherTraffic.js';
 import { activeNotesByClub } from '../annotations.js';
 
 const MAX_BACKOFF_MS = 5 * 60_000;
@@ -21,6 +23,9 @@ const PRIMARY_PROBE_EVERY = 6;
 // Rescue tier (ADSBx, paid per request): probe an aircraft at most this often.
 const RESCUE_MIN_INTERVAL_MS = 120_000;
 const RESCUE_MAX_PER_CYCLE = 2;
+// Ambient other-traffic area query: at most this often per club — context can
+// lag a few seconds; the fleet keeps the fast cadence.
+const OTHER_TRAFFIC_MIN_INTERVAL_MS = 10_000;
 
 export interface RescueTier {
   provider: AdsbProvider;
@@ -43,6 +48,8 @@ export class Poller {
   private lastRescueErrLogAt = 0;
   private lastOkLogAt = 0;
   private lastFailoverErrLogAt = 0;
+  private lastTrafficFetchByClub = new Map<number, number>();
+  private lastTrafficErrLogAt = 0;
   private lastDeadmanAt = 0;
   private timer: NodeJS.Timeout | null = null;
   private running = false;
@@ -330,6 +337,60 @@ export class Poller {
     };
   }
 
+  // Ambient other-traffic pass: for clubs that opted in, one area query around
+  // the club's map centre, published to the live bus only — never stored.
+  // Fully self-contained error handling: a traffic failure must never mark the
+  // fleet poll unhealthy, and must never throw into the cycle.
+  private async otherTrafficPass(): Promise<void> {
+    let rows: { id: number; map_center: string; other_traffic: string }[];
+    try {
+      rows = this.db
+        .prepare('SELECT id, map_center, other_traffic FROM clubs')
+        .all() as { id: number; map_center: string; other_traffic: string }[];
+    } catch {
+      return;
+    }
+    for (const c of rows) {
+      try {
+        const prefs = otherTrafficPrefs(c);
+        if (!prefs.enabled) {
+          this.live.setOtherTraffic(c.id, []); // authoritative clear (no-op when already empty)
+          continue;
+        }
+        if (this.live.clientCount(c.id) === 0) continue; // nobody watching: skip the upstream spend
+        const now = Date.now();
+        if (now - (this.lastTrafficFetchByClub.get(c.id) ?? 0) < OTHER_TRAFFIC_MIN_INTERVAL_MS) continue;
+        const [lat, lon] = c.map_center.split(',').map(Number);
+        if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+        this.lastTrafficFetchByClub.set(c.id, now);
+        let area: OtherAircraft[] | null = null;
+        for (const p of this.providers) {
+          if (!p.fetchArea) continue;
+          try {
+            area = await p.fetchArea(lat, lon, prefs.radiusNm);
+            break;
+          } catch (err) {
+            if (Date.now() - this.lastTrafficErrLogAt > 5 * 60_000) {
+              this.lastTrafficErrLogAt = Date.now();
+              this.logPoll(`${p.name} (traffic)`, false, (err as { status?: number }).status ?? null, String(err), 0, 0);
+            }
+          }
+        }
+        if (!area) continue; // both networks down: keep the last list; clients age entries out
+        const own = new Set(
+          (
+            this.db
+              .prepare('SELECT lower(hex) h FROM aircraft WHERE club_id = ? AND deleted_at IS NULL')
+              .all(c.id) as { h: string }[]
+          ).map((r) => r.h)
+        );
+        this.live.setOtherTraffic(c.id, filterOtherTraffic(area, own, prefs, lat, lon));
+      } catch {
+        /* one club's traffic failing must not starve the rest */
+      }
+    }
+  }
+
   // One full poll cycle. Public so tests can drive it directly.
   async runCycle(): Promise<void> {
     const started = Date.now();
@@ -464,6 +525,12 @@ export class Poller {
       this.logPoll(this.providers[0]?.name ?? 'unknown', false, status, this.lastPollError, 0, Date.now() - started);
     }
     this.lastPollAt = Date.now();
+
+    // Ambient other-traffic (independent of fleet polling; catches internally,
+    // so the fleet-health flags above stay honest about the fleet feed). The
+    // extra .catch guards the reschedule in the finally below — this await sits
+    // outside both try blocks, and an unguarded throw here would stop the loop.
+    await this.otherTrafficPass().catch(() => {});
 
     // The live fan-out tail must never stop the loop: a throw here (e.g. a
     // write on a half-closed socket) is caught, logged, and the next cycle is

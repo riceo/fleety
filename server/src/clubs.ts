@@ -18,12 +18,52 @@ export interface ClubRow {
   timezone: string;
   weather_layer: number;
   callsign_rules: string; // JSON [{prefix, spoken}]
+  other_traffic: string; // JSON OtherTrafficPrefs
   created_at: number;
 }
 
 export interface CallsignRule {
   prefix: string;
   spoken: string;
+}
+
+// Ambient non-fleet traffic layer (kiosk/live map). Off by default — it costs
+// an upstream area query per cycle and busies the board, so a club opts in.
+export interface OtherTrafficPrefs {
+  enabled: boolean;
+  maxAltFt: number; // hide traffic above this altitude (keeps airway metal off a circuit-height board)
+  radiusNm: number; // area-query radius around the club's map centre
+  color: string; // single icon tint for every non-fleet aircraft
+}
+
+export const OTHER_TRAFFIC_DEFAULTS: OtherTrafficPrefs = {
+  enabled: false,
+  maxAltFt: 10_000,
+  radiusNm: 30,
+  color: '#7d8db5',
+};
+
+const clampInt = (v: unknown, lo: number, hi: number, fallback: number): number => {
+  const n = Math.round(Number(v));
+  return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : fallback;
+};
+
+// Tolerant parse of the stored JSON — a corrupt value degrades to defaults,
+// never throws into a request or the poll loop.
+export function otherTrafficPrefs(club: Pick<ClubRow, 'other_traffic'>): OtherTrafficPrefs {
+  let raw: Partial<OtherTrafficPrefs>;
+  try {
+    raw = JSON.parse(club.other_traffic || '{}') as Partial<OtherTrafficPrefs>;
+  } catch {
+    raw = {};
+  }
+  const d = OTHER_TRAFFIC_DEFAULTS;
+  return {
+    enabled: !!raw.enabled,
+    maxAltFt: clampInt(raw.maxAltFt, 500, 60_000, d.maxAltFt),
+    radiusNm: clampInt(raw.radiusNm, 5, 100, d.radiusNm),
+    color: /^#[0-9a-fA-F]{6}$/.test(String(raw.color)) ? String(raw.color) : d.color,
+  };
 }
 
 // Small in-memory cache — every request resolves its club from the Host

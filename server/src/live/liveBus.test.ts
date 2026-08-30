@@ -160,3 +160,56 @@ describe('LiveBus awake status', () => {
     expect(memberDelta).toContain('"removed":[1]'); // members keep aircraft 2
   });
 });
+
+describe('LiveBus ambient traffic', () => {
+  const t = (hex: string) => ({
+    hex,
+    ts: now,
+    lat: 51.4,
+    lon: 0.6,
+    alt: 2500,
+    gs: 100,
+    track: 180,
+    callsign: 'XXX1',
+    reg: null,
+    type: null,
+  });
+
+  it('fans a changed list out to that club only, and stays quiet when unchanged', () => {
+    const bus = new LiveBus();
+    const a: string[] = [];
+    const b: string[] = [];
+    bus.addClient(1, { write: (s: string) => a.push(s), end: () => {} } as never, 'restricted', true);
+    bus.addClient(2, { write: (s: string) => b.push(s), end: () => {} } as never, 'member', true);
+    const countTraffic = (w: string[]) => w.filter((x) => x.startsWith('event: traffic')).length;
+    // Both got the (empty) connect-time state.
+    expect(countTraffic(a)).toBe(1);
+    expect(countTraffic(b)).toBe(1);
+
+    bus.setOtherTraffic(1, [t('abc123')]);
+    bus.flush();
+    expect(countTraffic(a)).toBe(2);
+    expect(countTraffic(b)).toBe(1); // other club: nothing
+    expect(a[a.length - 1]).toContain('"hex":"abc123"');
+
+    // Same list again: no wire traffic.
+    bus.setOtherTraffic(1, [t('abc123')]);
+    bus.flush();
+    expect(countTraffic(a)).toBe(2);
+
+    // Cleared: one final empty event.
+    bus.setOtherTraffic(1, []);
+    bus.flush();
+    expect(a[a.length - 1]).toContain('event: traffic\ndata: {"aircraft":[]}');
+  });
+
+  it('a new client receives the current list on connect', () => {
+    const bus = new LiveBus();
+    bus.setOtherTraffic(1, [t('def456')]);
+    bus.flush(); // nobody connected yet — flush just clears the dirty flag
+    const w: string[] = [];
+    bus.addClient(1, { write: (s: string) => w.push(s), end: () => {} } as never, 'restricted', true);
+    const traffic = w.find((x) => x.startsWith('event: traffic')) ?? '';
+    expect(traffic).toContain('"hex":"def456"');
+  });
+});

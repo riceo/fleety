@@ -30,7 +30,7 @@ import {
 } from './auth/sessions.js';
 import { dbFileSizeBytes } from './db/index.js';
 import { postTickerMessage, tickerItems, type TickerEmit } from './annotations.js';
-import { Clubs, displayCallsignFor, type ClubRow } from './clubs.js';
+import { Clubs, displayCallsignFor, otherTrafficPrefs, type ClubRow } from './clubs.js';
 import { emailConfigured, sendInviteEmail, sendResetEmail, sendWaitlistNotification } from './email.js';
 import { renderAircraftOgCard } from './og.js';
 import { collectMetrics } from './metrics.js';
@@ -399,6 +399,11 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
       kioskViewMode: kioskPrefs(club).viewMode === 'overview' ? 'overview' : 'target',
       timezone: club.timezone,
       weatherLayer: club.weather_layer === 1,
+      otherTraffic: (() => {
+        const p = otherTrafficPrefs(club);
+        // radiusNm stays server-side (it shapes the upstream query, not the render).
+        return { enabled: p.enabled, color: p.color, maxAltFt: p.maxAltFt };
+      })(),
     };
   });
 
@@ -931,6 +936,26 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
         prefs.viewMode = b.kioskViewMode === 'overview' ? 'overview' : 'target';
         return JSON.stringify(prefs);
       })(),
+      other_traffic: (() => {
+        if (b.otherTraffic === undefined || typeof b.otherTraffic !== 'object' || b.otherTraffic === null) {
+          return club.other_traffic;
+        }
+        // Merge over the current (parsed+clamped) prefs so a partial payload
+        // never resets the untouched knobs; otherTrafficPrefs re-clamps on
+        // read, but storing clean values keeps the row inspectable.
+        const cur = otherTrafficPrefs(club);
+        const o = b.otherTraffic as Record<string, unknown>;
+        const int = (v: unknown, lo: number, hi: number, fallback: number): number => {
+          const n = Math.round(Number(v));
+          return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : fallback;
+        };
+        return JSON.stringify({
+          enabled: o.enabled === undefined ? cur.enabled : !!o.enabled,
+          maxAltFt: o.maxAltFt === undefined ? cur.maxAltFt : int(o.maxAltFt, 500, 60_000, cur.maxAltFt),
+          radiusNm: o.radiusNm === undefined ? cur.radiusNm : int(o.radiusNm, 5, 100, cur.radiusNm),
+          color: /^#[0-9a-fA-F]{6}$/.test(String(o.color)) ? String(o.color) : cur.color,
+        });
+      })(),
       callsign_rules: (() => {
         if (b.callsignRules === undefined) return club.callsign_rules;
         try {
@@ -950,7 +975,7 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     db.prepare(
       `UPDATE clubs SET name=@name, subheading=@subheading, theme=@theme, accent=@accent, map_center=@map_center,
        map_zoom=@map_zoom, tile_style_url=@tile_style_url, public_mode=@public_mode, callsign_rules=@callsign_rules,
-       kiosk_prefs=@kiosk_prefs, timezone=@timezone, weather_layer=@weather_layer
+       kiosk_prefs=@kiosk_prefs, timezone=@timezone, weather_layer=@weather_layer, other_traffic=@other_traffic
        WHERE id=@id`
     ).run(next);
     clubs.reload();

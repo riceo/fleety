@@ -635,6 +635,23 @@ label.check {
   border-color: var(--line-strong);
 }
 
+/* Offline aircraft recede hard in the strip bay and the kiosk rail — with
+   only a badge to tell them apart, people read parked strips as live ones. */
+.strip-offline,
+.board-card.offline {
+  opacity: 0.45;
+  filter: saturate(0.25);
+  border-left-color: var(--line-strong);
+}
+.strip-offline .strip-callsign,
+.board-card.offline .board-callsign {
+  color: var(--ink-dim);
+}
+.board-card.offline .board-card-photo {
+  opacity: 0.12;
+  filter: grayscale(1);
+}
+
 /* ---------- target data panel ---------- */
 
 .target-panel {

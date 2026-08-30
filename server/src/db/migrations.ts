@@ -333,6 +333,25 @@ ALTER TABLE clubs ADD COLUMN weather_layer INTEGER NOT NULL DEFAULT 1;
 ALTER TABLE clubs ADD COLUMN other_traffic TEXT NOT NULL DEFAULT '{}';
 `,
   },
+  {
+    // Global per-club fleet colour, with a per-aircraft override flag. Backfill
+    // each club's fleet_color to its current *modal* aircraft colour, and mark
+    // only the aircraft that already differ as explicit overrides — so existing
+    // boards render identically after deploy, yet changing the club colour now
+    // recolours every aircraft that hadn't been individually customised.
+    id: 13,
+    sql: `
+ALTER TABLE clubs ADD COLUMN fleet_color TEXT NOT NULL DEFAULT '#e32636';
+ALTER TABLE aircraft ADD COLUMN color_custom INTEGER NOT NULL DEFAULT 0;
+UPDATE clubs SET fleet_color = COALESCE((
+  SELECT a.color FROM aircraft a
+   WHERE a.club_id = clubs.id AND a.deleted_at IS NULL
+   GROUP BY a.color ORDER BY COUNT(*) DESC, a.color LIMIT 1
+), fleet_color);
+UPDATE aircraft SET color_custom = 1
+ WHERE color <> (SELECT fleet_color FROM clubs WHERE clubs.id = aircraft.club_id);
+`,
+  },
 ];
 
 export function migrate(db: Database): void {

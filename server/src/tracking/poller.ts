@@ -97,9 +97,20 @@ export class Poller {
         "UPDATE aircraft SET enabled = 0, updated_at = ? WHERE track_until IS NOT NULL AND track_until < date('now') AND enabled = 1"
       )
       .run(Date.now());
-    return this.db
-      .prepare('SELECT * FROM aircraft WHERE deleted_at IS NULL ORDER BY club_id, sort_order, id')
-      .all() as AircraftRow[];
+    // Resolve the effective render colour here (override wins; else inherit the
+    // club's global fleet colour) so the live board, share cards and history all
+    // agree. The admin API still serves the raw color + color_custom for editing.
+    const rows = this.db
+      .prepare(
+        `SELECT a.*, c.fleet_color AS club_fleet_color
+           FROM aircraft a JOIN clubs c ON c.id = a.club_id
+          WHERE a.deleted_at IS NULL ORDER BY a.club_id, a.sort_order, a.id`
+      )
+      .all() as (AircraftRow & { club_fleet_color: string })[];
+    return rows.map(({ club_fleet_color, ...r }) => ({
+      ...r,
+      color: r.color_custom ? r.color : club_fleet_color,
+    }));
   }
 
   private logPoll(

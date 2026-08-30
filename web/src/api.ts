@@ -88,6 +88,7 @@ export interface AppConfig {
   kioskViewMode?: 'target' | 'overview';
   timezone?: string;
   weatherLayer?: boolean;
+  fleetColor?: string; // club-wide default fleet icon colour (per-aircraft overrides win)
   otherTraffic?: { enabled: boolean; color: string; maxAltFt: number };
 }
 

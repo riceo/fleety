@@ -47,6 +47,7 @@ export interface AircraftRow {
   icon_path: string | null;
   photo_path: string | null;
   color: string;
+  color_custom: number; // 1 = use this aircraft's own color; 0 = inherit the club's fleet_color
   enabled: number;
   category: 'fleet' | 'guest';
   visibility: 'public' | 'members';

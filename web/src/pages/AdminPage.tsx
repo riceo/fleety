@@ -78,6 +78,7 @@ interface AdminAircraft {
   icon_path: string | null;
   photo_path: string | null;
   color: string;
+  color_custom: number;
   enabled: number;
   category: 'fleet' | 'guest';
   visibility: 'public' | 'members';
@@ -97,6 +98,7 @@ const EMPTY_AC: Partial<AdminAircraft> = {
   operator: '',
   icon: 'low-wing',
   color: '#38bdf8',
+  color_custom: 0,
   category: 'fleet',
   visibility: 'public',
   enabled: 1,
@@ -106,6 +108,7 @@ const EMPTY_AC: Partial<AdminAircraft> = {
 
 function AircraftForm({ initial, onDone }: { initial: Partial<AdminAircraft>; onDone: () => void }) {
   const [f, setF] = useState<Partial<AdminAircraft>>(initial);
+  const { config } = useAuth();
   const [error, setError] = useState('');
   const [looking, setLooking] = useState(false);
   const set = (k: keyof AdminAircraft, v: unknown) => setF((p) => ({ ...p, [k]: v }));
@@ -151,6 +154,7 @@ function AircraftForm({ initial, onDone }: { initial: Partial<AdminAircraft>; on
       operator: f.operator,
       icon: f.icon,
       color: f.color,
+      colorCustom: f.color_custom === 1,
       enabled: f.enabled !== 0,
       category: f.category,
       visibility: f.visibility,
@@ -249,11 +253,24 @@ function AircraftForm({ initial, onDone }: { initial: Partial<AdminAircraft>; on
             ))}
           </select>
         </label>
-        <label>
-          Colour
-          <input type="color" value={f.color ?? '#38bdf8'} onChange={(e) => set('color', e.target.value)} />
+        <label className="check" style={{ alignSelf: 'flex-end' }}>
+          <input
+            type="checkbox"
+            checked={f.color_custom !== 1}
+            onChange={(e) => set('color_custom', e.target.checked ? 0 : 1)}
+          />
+          Use fleet colour
         </label>
-        <IconPreview icon={f.icon ?? 'low-wing'} color={f.color ?? '#38bdf8'} />
+        {f.color_custom === 1 && (
+          <label>
+            Colour
+            <input type="color" value={f.color ?? '#38bdf8'} onChange={(e) => set('color', e.target.value)} />
+          </label>
+        )}
+        <IconPreview
+          icon={f.icon ?? 'low-wing'}
+          color={f.color_custom === 1 ? f.color ?? '#38bdf8' : config?.fleetColor ?? '#e32636'}
+        />
       </div>
       <label>
         Description (shown to viewers, e.g. “4-seat tourer — our IFR trainer”)
@@ -1104,6 +1121,7 @@ interface ClubSettings {
   callsign_rules: string;
   timezone: string;
   weather_layer: number;
+  fleet_color: string;
   other_traffic: string;
 }
 
@@ -1420,6 +1438,20 @@ export function SettingsAdmin() {
           airborne weather radar, plus ice-blue for snow. Light rain and drizzle are filtered out, so the map stays
           clean until there&rsquo;s weather that matters. Data from RainViewer, refreshed every ~10 minutes.
         </p>
+        <div className="form-row">
+          <label>
+            Fleet colour
+            <input
+              type="color"
+              value={String(val('fleet_color', 'fleetColor'))}
+              onChange={(e) => setKey('fleetColor', e.target.value)}
+            />
+          </label>
+        </div>
+        <p className="muted small">
+          The default colour for every fleet aircraft&rsquo;s icon and trail. An aircraft given its own
+          colour in its edit form keeps that instead.
+        </p>
         <label className="check">
           <input type="checkbox" checked={ot.enabled} onChange={(e) => setOt({ enabled: e.target.checked })} />
           Show other aircraft near the club (non-fleet ADS-B traffic)
@@ -1457,8 +1489,8 @@ export function SettingsAdmin() {
           </div>
         )}
         <p className="muted small">
-          Non-fleet traffic appears as small faded icons in one colour, under the fleet — unmistakably
-          background. The altitude ceiling keeps high airway traffic off a circuit-height board.
+          Non-fleet traffic appears as muted icons in one colour, under the fleet — clearly background,
+          but easy to pick out. The altitude ceiling keeps high airway traffic off a circuit-height board.
         </p>
       </section>
 

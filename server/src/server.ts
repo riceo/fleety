@@ -399,6 +399,7 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
       kioskViewMode: kioskPrefs(club).viewMode === 'overview' ? 'overview' : 'target',
       timezone: club.timezone,
       weatherLayer: club.weather_layer === 1,
+      fleetColor: club.fleet_color,
       otherTraffic: (() => {
         const p = otherTrafficPrefs(club);
         // radiusNm stays server-side (it shapes the upstream query, not the render).
@@ -491,10 +492,12 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
   // ---------- flights / history ----------
 
   const flightListSql = `
-    SELECT f.*, a.registration, a.callsign AS expected_callsign, a.type_name, a.color,
+    SELECT f.*, a.registration, a.callsign AS expected_callsign, a.type_name,
+           CASE WHEN a.color_custom = 1 THEN a.color ELSE c.fleet_color END AS color,
            ao.code AS origin_code, ad.code AS dest_code
     FROM flights f
     JOIN aircraft a ON a.id = f.aircraft_id
+    JOIN clubs c ON c.id = a.club_id
     LEFT JOIN airfields ao ON ao.id = f.origin_airfield_id
     LEFT JOIN airfields ad ON ad.id = f.dest_airfield_id`;
 
@@ -606,6 +609,8 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     operator: String(body.operator ?? '').trim(),
     icon: String(body.icon ?? 'low-wing'),
     color: /^#[0-9a-fA-F]{6}$/.test(String(body.color)) ? String(body.color) : '#e32636',
+    // 1 = this aircraft keeps its own colour; 0 = inherit the club's fleet_color.
+    color_custom: body.colorCustom ? 1 : 0,
     enabled: body.enabled === false ? 0 : 1,
     category: body.category === 'guest' ? 'guest' : 'fleet',
     visibility: body.visibility === 'members' ? 'members' : 'public',
@@ -633,9 +638,9 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     try {
       const res = db
         .prepare(
-          `INSERT INTO aircraft (club_id, hex, registration, callsign, type_name, icao_type, nickname, tagline, description, operator, icon, color,
+          `INSERT INTO aircraft (club_id, hex, registration, callsign, type_name, icao_type, nickname, tagline, description, operator, icon, color, color_custom,
              enabled, category, visibility, track_until, sort_order, notes, created_at, updated_at)
-           VALUES (@club_id, @hex, @registration, @callsign, @type_name, @icao_type, @nickname, @tagline, @description, @operator, @icon, @color,
+           VALUES (@club_id, @hex, @registration, @callsign, @type_name, @icao_type, @nickname, @tagline, @description, @operator, @icon, @color, @color_custom,
              @enabled, @category, @visibility, @track_until, @sort_order, @notes, ${now}, ${now})`
         )
         .run({ ...a, club_id: club.id });
@@ -657,7 +662,7 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     try {
       db.prepare(
         `UPDATE aircraft SET hex=@hex, registration=@registration, callsign=@callsign, type_name=@type_name,
-           icao_type=@icao_type, nickname=@nickname, tagline=@tagline, description=@description, operator=@operator, icon=@icon, color=@color, enabled=@enabled,
+           icao_type=@icao_type, nickname=@nickname, tagline=@tagline, description=@description, operator=@operator, icon=@icon, color=@color, color_custom=@color_custom, enabled=@enabled,
            category=@category, visibility=@visibility, track_until=@track_until, sort_order=@sort_order, notes=@notes,
            updated_at=${Date.now()}
          WHERE id = @id`
@@ -930,6 +935,7 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
       timezone: isValidTimezone(b.timezone) ? String(b.timezone) : club.timezone,
       public_mode: b.publicMode === undefined ? club.public_mode : b.publicMode ? 1 : 0,
       weather_layer: b.weatherLayer === undefined ? club.weather_layer : b.weatherLayer ? 1 : 0,
+      fleet_color: /^#[0-9a-fA-F]{6}$/.test(String(b.fleetColor)) ? String(b.fleetColor) : club.fleet_color,
       kiosk_prefs: (() => {
         if (b.kioskViewMode === undefined) return club.kiosk_prefs;
         const prefs = kioskPrefs(club);
@@ -975,7 +981,7 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     db.prepare(
       `UPDATE clubs SET name=@name, subheading=@subheading, theme=@theme, accent=@accent, map_center=@map_center,
        map_zoom=@map_zoom, tile_style_url=@tile_style_url, public_mode=@public_mode, callsign_rules=@callsign_rules,
-       kiosk_prefs=@kiosk_prefs, timezone=@timezone, weather_layer=@weather_layer, other_traffic=@other_traffic
+       kiosk_prefs=@kiosk_prefs, timezone=@timezone, weather_layer=@weather_layer, fleet_color=@fleet_color, other_traffic=@other_traffic
        WHERE id=@id`
     ).run(next);
     clubs.reload();

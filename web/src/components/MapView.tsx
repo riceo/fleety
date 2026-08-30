@@ -358,7 +358,7 @@ export const MapView = forwardRef<MapViewHandle, Props>(function MapView(
         source: 'others',
         layout: {
           'icon-image': 'other-ac',
-          'icon-size': 0.3,
+          'icon-size': 0.36,
           'icon-rotate': ['get', 'rotation'],
           'icon-rotation-alignment': 'map',
           'icon-allow-overlap': true,
@@ -370,9 +370,9 @@ export const MapView = forwardRef<MapViewHandle, Props>(function MapView(
           'text-font': ['Noto Sans Regular'],
         },
         paint: {
-          'icon-opacity': 0.55,
+          'icon-opacity': 0.9,
           'text-color': pal.otherLabel,
-          'text-opacity': 0.8,
+          'text-opacity': 0.9,
           'text-halo-color': pal.halo,
           'text-halo-width': 1.1,
         },

@@ -17,6 +17,7 @@ export interface ClubRow {
   kiosk_prefs: string;
   timezone: string;
   weather_layer: number;
+  fleet_color: string; // global fleet icon colour; a per-aircraft color_custom overrides it
   callsign_rules: string; // JSON [{prefix, spoken}]
   other_traffic: string; // JSON OtherTrafficPrefs
   created_at: number;

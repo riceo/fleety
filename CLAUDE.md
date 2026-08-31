@@ -26,15 +26,23 @@ Kent airfields + the platform-admin from `ADMIN_EMAIL`/`ADMIN_PASSWORD`.
 Note: `npm test` can show broad, spurious failures if a preview/dev server is running at the same time
 (resource contention between vitest workers). Stop it and re-run — an isolated run is authoritative.
 
+Two more test gotchas: (1) every test failing instantly with a `better-sqlite3 … NODE_MODULE_VERSION`
+error means the shell picked up the wrong Node — the native module is compiled for Node 22, so
+`nvm use 22` (or rebuild) and re-run; (2) the root `package.json` mirrors the commands for convenience
+(`npm run build` / `npm test` / `npm run dev:server` / `npm run dev:web` from the repo root).
+
 ## Where things live
 
 ```
 server/src/
-  server.ts            ALL HTTP routes + guards (large; the authz matrix lives here)
+  server.ts            ALL HTTP routes + guards + the fleety.live waitlist (large; the authz matrix lives here)
   index.ts             boot/wiring: seed, poller.start, intervals (heartbeat, metrics, nightly), shutdown
   config.ts            env -> config object (single source for env vars)
   clubs.ts             tenant resolution from Host header; callsign-rule parsing; ClubRow
   escape.ts            escapeHtml / escapeXml — the ONLY escapers (don't re-implement)
+  settings.ts          write-through cached key/value settings table (read on poller/auth hot paths)
+  email.ts             outbound mail via Resend (invites/resets/alerts); no key ⇒ shareable links instead
+  types.ts             NormPosition — the provider-boundary shape (ms epoch UTC, position time not poll time)
   live/liveBus.ts      SSE fan-out: per-club channels, snapshot/delta, ring+resume, audience filtering
   tracking/
     poller.ts          the one shared poll loop (all clubs) + the ADSBx rescue tier + other-traffic pass
@@ -42,6 +50,7 @@ server/src/
     otherTraffic.ts    policy filter for the ambient non-fleet traffic layer (own-hex/ceiling/cap)
     flightStats.ts, geo.ts
   providers/           adsbLol (primary), adsbFi (failover), adsbx (paid rescue), readsb (shared normalise)
+  enrichment/          lookup.ts — hexdb.io registration/type lookup when adding aircraft
   db/                  index.ts (open + WAL + FK), migrations.ts (additive-only), seed.ts
   auth/                sessions.ts (session + login tokens), passwords.ts (argon2id)
   og.ts                sharp-rendered social share card (1200x630 JPEG)
@@ -49,14 +58,25 @@ server/src/
   retention.ts         nightly prune + VACUUM backup
   annotations.ts       ticker events / per-flight notes
 web/src/
-  pages/               LivePage, KioskPage, HistoryPage, ReplayPage, AdminPage, PlatformPage, LoginPage, ...
+  pages/               LivePage, KioskPage, HistoryPage, ReplayPage, AdminPage, PlatformPage,
+                       LoginPage, AccountPage, CookiesPage
   components/          MapView, FleetPanel, Ticker, TopBar, ImageCropper, ErrorBoundary
   live.ts              EventSource client (mirror of the SSE protocol)
   api.ts               fetch helpers + the client-side types of every server payload
   auth.tsx             AuthProvider; loads /api/config + /api/me; setCallsignRules/setTimezone
   chartStyle.ts        "Chart" basemap: liberty recoloured in place (green land / blue water) when
                        tile_style_url carries #fleety=chart; old bundles ignore the fragment
+  format.ts            per-club timezone + date/duration/callsign display (setTimezone from /api/config)
+  icons.ts             built-in aircraft silhouette SVGs, tinted + rasterised for MapLibre addImage
+  sound.ts             WebAudio two-tone ticker ping (no asset)
+  weather.ts           significant-weather radar overlay: RainViewer tiles reverse-mapped to dBZ and
+                       re-banded client-side (sigwx protocol); per-club clubs.weather_layer toggle
+  sparkle.ts           the Honor clause — sparkly rendering for matching aircraft
+  useSwipeDismiss.ts   drag-down-to-dismiss for mobile cards/sheets
 ```
+
+Repo root: `Dockerfile` is the deployed image; `docker-compose.yml` + `Caddyfile` are for non-Coolify
+hosts only; `.claude/launch.json` runs the built server for browser preview (build both packages first).
 
 Request flow: Cloudflare → Coolify (Traefik) → Fastify. `onRequest` resolves `req.club` from the Host
 header and `req.auth` from the session cookie, sets security headers (incl. CSP), and enforces the CSRF

@@ -36,6 +36,8 @@ were removed from FlightRadar24; productised so any club can have one.
 
 ## Local development
 
+Node 22 (`nvm use 22` — better-sqlite3 is a native module compiled against it).
+
 ```bash
 cd server && npm install
 ADMIN_EMAIL=you@example.com ADMIN_PASSWORD=change-me npm run dev   # API on :8080

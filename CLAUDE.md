@@ -54,6 +54,8 @@ web/src/
   live.ts              EventSource client (mirror of the SSE protocol)
   api.ts               fetch helpers + the client-side types of every server payload
   auth.tsx             AuthProvider; loads /api/config + /api/me; setCallsignRules/setTimezone
+  chartStyle.ts        "Chart" basemap: liberty recoloured in place (green land / blue water) when
+                       tile_style_url carries #fleety=chart; old bundles ignore the fragment
 ```
 
 Request flow: Cloudflare → Coolify (Traefik) → Fastify. `onRequest` resolves `req.club` from the Host

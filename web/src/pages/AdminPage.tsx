@@ -1115,11 +1115,14 @@ const THEME_OPTIONS = [
 ];
 
 // Basemap presets (openfreemap). "Custom" keeps the raw-URL escape hatch for
-// clubs pointing at their own tile server.
+// clubs pointing at their own tile server. The chart preset is liberty plus a
+// fragment marker the client rethemes (chartStyle.ts) — older cached bundles
+// ignore the fragment and safely render plain liberty.
 const MAP_STYLE_OPTIONS = [
   { url: 'https://tiles.openfreemap.org/styles/dark', label: 'Dark ops — radar-room look (default)' },
-  { url: 'https://tiles.openfreemap.org/styles/liberty', label: 'Standard — green land, blue water' },
-  { url: 'https://tiles.openfreemap.org/styles/bright', label: 'Bright — standard, higher contrast' },
+  { url: 'https://tiles.openfreemap.org/styles/liberty#fleety=chart', label: 'Chart — green land, blue water' },
+  { url: 'https://tiles.openfreemap.org/styles/liberty', label: 'Street map — classic web look' },
+  { url: 'https://tiles.openfreemap.org/styles/bright', label: 'Street map — higher contrast' },
   { url: 'https://tiles.openfreemap.org/styles/positron', label: 'Minimal light — pale greys' },
 ];
 
@@ -1395,8 +1398,8 @@ export function SettingsAdmin() {
           </div>
         )}
         <p className="muted small">
-          “Standard” gives the classic look — green land, blue water — if the dark radar style isn’t your
-          club’s thing. Labels adapt automatically.
+          “Chart” is the atlas look — green land, blue water, quiet roads, no street-map clutter. The
+          street-map styles are there too if that’s more your thing. Labels adapt automatically.
         </p>
         <div className="form-row">
           <label>

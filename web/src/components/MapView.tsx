@@ -6,6 +6,7 @@ import { renderIcon, renderRoundel } from '../icons';
 import { isSparkly } from '../sparkle';
 import { displayCallsign } from '../format';
 import { attachWeather } from '../weather';
+import { applyChartTheme, baseStyleUrl, isChartUrl } from '../chartStyle';
 
 const CLUB_BLUE = '#5b6bc4';
 
@@ -299,14 +300,21 @@ export const MapView = forwardRef<MapViewHandle, Props>(function MapView(
     // Note: spreading an explicit `undefined` for an option OVERRIDES the
     // MapLibre default (fadeDuration: undefined => NaN symbol opacity => no
     // labels/icons anywhere) — only set kiosk overrides when they apply.
+    const rawStyleUrl = config.tileStyleUrl ?? 'https://tiles.openfreemap.org/styles/dark';
+    const chart = isChartUrl(rawStyleUrl);
     const map = new maplibregl.Map({
       container: containerRef.current,
-      style: config.tileStyleUrl ?? 'https://tiles.openfreemap.org/styles/dark',
+      // The chart preset is the liberty style recoloured client-side — fetch
+      // the base style (fragment stripped) and retheme it on style.load.
+      style: chart ? baseStyleUrl(rawStyleUrl) : rawStyleUrl,
       center: [centerLon || 0.5, centerLat || 51.35],
       zoom: config.mapZoom || 9,
       attributionControl: { compact: true },
       ...(kiosk ? { pixelRatio: Math.min(window.devicePixelRatio, 1.5), fadeDuration: 0 } : {}),
     });
+    // style.load fires before the first render (and again on any style
+    // reload), so the board never shows the stock street colours.
+    if (chart) map.on('style.load', () => applyChartTheme(map));
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
     mapRef.current = map;
     (window as unknown as { __fvMap?: maplibregl.Map }).__fvMap = map;

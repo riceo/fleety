@@ -78,7 +78,7 @@ export class FlightDetector {
       .all() as { id: number; aircraft_id: number; club_id: number }[];
     for (const f of open) {
       const last = this.db
-        .prepare('SELECT * FROM positions WHERE aircraft_id = ? ORDER BY ts DESC LIMIT 1')
+        .prepare('SELECT * FROM positions WHERE aircraft_id = ? AND suspect = 0 ORDER BY ts DESC LIMIT 1')
         .get(f.aircraft_id) as
         | {
             ts: number;

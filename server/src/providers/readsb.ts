@@ -4,6 +4,9 @@ import type { NormPosition, NormPresence, OtherAircraft } from '../types.js';
 // aggregator APIs (and a local tar1090). Both providers share this shape.
 export interface ReadsbAircraft {
   hex?: string;
+  type?: string; // position source class: adsb_icao, mlat, tisb_*, mode_s…
+  mlat?: string[]; // fields derived by multilateration (lat/lon here ⇒ an MLAT solve)
+  tisb?: string[];
   flight?: string;
   r?: string; // registration, as enriched by the aggregator
   t?: string; // ICAO type code (C172, PA28…)
@@ -61,6 +64,8 @@ export function normalizeReadsb(ac: ReadsbAircraft, pollTime: number, source: st
     rssi: num(ac.rssi),
     messages: num(ac.messages),
     seenPos,
+    // Some feeds omit `type` but still flag MLAT-derived lat/lon in `mlat`.
+    posType: ac.type ?? (Array.isArray(ac.mlat) && ac.mlat.includes('lat') ? 'mlat' : null),
     wd: num(ac.wd),
     ws: num(ac.ws),
     navQnh: num(ac.nav_qnh),

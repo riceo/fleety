@@ -318,7 +318,12 @@ interface HealthMetric {
   note: string;
 }
 interface PlatformStatusRes {
-  poller: { lastPollAt: number; ok: boolean; error: string | null };
+  poller: {
+    lastPollAt: number;
+    ok: boolean;
+    error: string | null;
+    gate?: { suspected: number; promoted: number; lastSuspectAt: number | null };
+  };
   recentPolls: { ts: number; provider: string; ok: number; error: string | null; aircraft_returned: number; duration_ms: number }[];
   dbSizeBytes: number;
   health: { uptimeSec: number; worst: 'ok' | 'watch' | 'alert'; projectionNote: string; metrics: HealthMetric[] };
@@ -364,6 +369,13 @@ function PlatformStatus() {
         The poller is shared across every club: {data.poller.ok ? 'healthy' : 'failing'}, last poll{' '}
         {data.poller.lastPollAt ? fmtAgo(data.poller.lastPollAt) : 'never'}
         {data.poller.error ? ` — ${data.poller.error}` : ''}. Database {(data.dbSizeBytes / 1024 / 1024).toFixed(1)} MB.
+        {data.poller.gate
+          ? ` Plausibility gate since boot: ${data.poller.gate.suspected} implausible ${
+              data.poller.gate.suspected === 1 ? 'fix' : 'fixes'
+            } quarantined, ${data.poller.gate.promoted} confirmed real${
+              data.poller.gate.lastSuspectAt ? `, last ${fmtAgo(data.poller.gate.lastSuspectAt)}` : ''
+            }. A steady trickle is normal MLAT life; a sudden climb means a provider is having a bad day.`
+          : ''}
       </p>
       <table className="table">
         <thead>

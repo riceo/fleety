@@ -46,6 +46,8 @@ server/src/
   live/liveBus.ts      SSE fan-out: per-club channels, snapshot/delta, ring+resume, audience filtering
   tracking/
     poller.ts          the one shared poll loop (all clubs) + the ADSBx rescue tier + other-traffic pass
+    gate.ts            plausibility gate: rejects teleporting fixes (bad MLAT solves) before they
+                       reach the detector/board; quarantine + two-solve confirmation for real moves
     flightDetector.ts  per-aircraft GROUND/AIRBORNE/LOST state machine, airfield geofences
     otherTraffic.ts    policy filter for the ambient non-fleet traffic layer (own-hex/ceiling/cap)
     flightStats.ts, geo.ts
@@ -95,9 +97,16 @@ header. Then the route runs.
   `isolation.test.ts` verify there is no cross-tenant leak — keep it that way.
 - **Positions are never pruned.** The product records full history deliberately; retention only nulls
   the raw-JSON blob after `raw_retention_days`. Do not add row deletion.
-- **`poller.applyBatch` advances the in-memory dedupe watermark (`lastTsByAircraft`) and `live.update`
-  only AFTER the DB transaction commits.** Moving them back inside the `db.transaction()` re-introduces
-  permanent fix-loss on a rollback (disk-full).
+- **`poller.applyBatch` advances the in-memory dedupe watermark (`lastTsByAircraft`), the plausibility
+  gate state, and `live.update` only AFTER the DB transaction commits.** Moving them back inside the
+  `db.transaction()` re-introduces permanent fix-loss on a rollback (disk-full). The gate's
+  `evaluate()` is pure for the same reason.
+- **Suspect positions are audit-only.** Fixes the gate rejects are stored with `suspect = 1` and
+  `flight_id NULL`, never fed to the detector/live bus, and never advance the watermark. Any
+  *aircraft-keyed* positions read (boot watermark priming, detector restore) must filter
+  `suspect = 0`; flight-keyed reads are inherently clean. Suspect fixes still count as transponder
+  *sightings* (the ticker's seen-recently check is deliberately unfiltered). Gate tunables are
+  settings keys (`gate_enabled`, `gate_max_kt`, `gate_mlat_kt`), counters on Platform → Health.
 - **All user/admin text rendered into HTML/XML goes through `escape.ts`.** The OG meta shell in
   `server.ts` (`renderShell`) uses **function** `String.replace(re, () => …)` — a string replacement is
   unsafe because `$` is not escaped. React escapes text by default; the only raw HTML sink is the

@@ -1325,7 +1325,14 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
   app.get('/api/platform/status', async (req, reply) => {
     if (!requirePlatform(req, reply)) return;
     return {
-      poller: { lastPollAt: poller.lastPollAt, ok: poller.lastPollOk, error: poller.lastPollError },
+      poller: {
+        lastPollAt: poller.lastPollAt,
+        ok: poller.lastPollOk,
+        error: poller.lastPollError,
+        // Plausibility-gate counters (since boot): a sudden climb means a
+        // provider is having a bad day, a steady trickle is normal MLAT life.
+        gate: poller.gateStats(),
+      },
       recentPolls: db.prepare('SELECT * FROM poll_log ORDER BY ts DESC LIMIT 30').all(),
       dbSizeBytes: dbFileSizeBytes(),
       health: collectMetrics(db, live),

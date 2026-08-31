@@ -352,6 +352,20 @@ UPDATE aircraft SET color_custom = 1
  WHERE color <> (SELECT fleet_color FROM clubs WHERE clubs.id = aircraft.club_id);
 `,
   },
+  {
+    // Plausibility gate (tracking/gate.ts): pos_type records the readsb source
+    // class (adsb_icao / mlat / tisb_*) the normaliser used to drop; suspect
+    // marks fixes the gate rejected as physically implausible — stored for
+    // audit/tuning (full history is deliberate) but excluded from the detector,
+    // the live board, and every aircraft-keyed read. Backfill pos_type from the
+    // raw blobs that retention hasn't nulled yet.
+    id: 14,
+    sql: `
+ALTER TABLE positions ADD COLUMN pos_type TEXT;
+ALTER TABLE positions ADD COLUMN suspect INTEGER NOT NULL DEFAULT 0;
+UPDATE positions SET pos_type = json_extract(raw, '$.type') WHERE raw IS NOT NULL;
+`,
+  },
 ];
 
 export function migrate(db: Database): void {

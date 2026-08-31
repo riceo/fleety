@@ -34,6 +34,7 @@ function mkPos(overrides: Partial<NormPosition>): NormPosition {
     rssi: -12,
     messages: 100,
     seenPos: 0,
+    posType: null,
     wd: null,
     ws: null,
     navQnh: null,

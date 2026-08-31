@@ -58,6 +58,7 @@ function pos(ts: number): NormPosition {
     rssi: null,
     messages: null,
     seenPos: 0,
+    posType: null,
     wd: null,
     ws: null,
     navQnh: null,

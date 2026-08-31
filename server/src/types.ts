@@ -24,6 +24,7 @@ export interface NormPosition {
   rssi: number | null;
   messages: number | null;
   seenPos: number | null; // seconds
+  posType: string | null; // readsb position source class: adsb_icao, mlat, tisb_*…
   wd: number | null; // wind direction
   ws: number | null; // wind speed
   navQnh: number | null;

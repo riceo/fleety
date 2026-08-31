@@ -5,6 +5,7 @@ import type { LiveBus } from '../live/liveBus.js';
 import type { AircraftRow, NormPosition, OtherAircraft } from '../types.js';
 import { otherTrafficPrefs } from '../clubs.js';
 import { FlightDetector } from './flightDetector.js';
+import { GATE_DEFAULTS, PlausibilityGate, type GateConfig } from './gate.js';
 import { filterOtherTraffic } from './otherTraffic.js';
 import { activeNotesByClub } from '../annotations.js';
 
@@ -38,6 +39,7 @@ export interface RescueTier {
 // aircraft (two clubs watching the same airframe share the same fix).
 export class Poller {
   private lastTsByAircraft = new Map<number, number>();
+  private gate = new PlausibilityGate();
   private consecutiveErrors = 0;
   private primaryErrorStreak = 0;
   private cycleCount = 0;
@@ -69,11 +71,29 @@ export class Poller {
     // vanished from every free network, under a hard persistent budget.
     private rescue?: RescueTier
   ) {
-    // Prime dedupe watermarks so a restart doesn't re-store stale fixes.
+    // Prime dedupe watermarks so a restart doesn't re-store stale fixes, and
+    // the plausibility gate so it judges against the last ACCEPTED fix (a
+    // suspect row must not become the baseline after a restart).
     const rows = this.db
-      .prepare('SELECT aircraft_id, MAX(ts) ts FROM positions GROUP BY aircraft_id')
-      .all() as { aircraft_id: number; ts: number }[];
-    for (const r of rows) this.lastTsByAircraft.set(r.aircraft_id, r.ts);
+      .prepare('SELECT aircraft_id, MAX(ts) ts, lat, lon FROM positions WHERE suspect = 0 GROUP BY aircraft_id')
+      .all() as { aircraft_id: number; ts: number; lat: number; lon: number }[];
+    for (const r of rows) {
+      this.lastTsByAircraft.set(r.aircraft_id, r.ts);
+      this.gate.prime(r.aircraft_id, { ts: r.ts, lat: r.lat, lon: r.lon });
+    }
+  }
+
+  private gateConfig(): GateConfig & { enabled: boolean } {
+    return {
+      ...GATE_DEFAULTS,
+      enabled: this.settings.get('gate_enabled', '1') !== '0',
+      maxKt: this.settings.getNum('gate_max_kt', GATE_DEFAULTS.maxKt),
+      mlatKt: this.settings.getNum('gate_mlat_kt', GATE_DEFAULTS.mlatKt),
+    };
+  }
+
+  gateStats(): { suspected: number; promoted: number; lastSuspectAt: number | null } {
+    return this.gate.stats();
   }
 
   start(): void {
@@ -138,13 +158,14 @@ export class Poller {
     fetch(url, { method: 'GET', signal: AbortSignal.timeout(10_000) }).catch(() => {});
   }
 
-  private insertPosition(aircraftId: number, p: NormPosition, flightId: number | null): void {
+  private insertPosition(aircraftId: number, p: NormPosition, flightId: number | null, suspect: boolean): void {
     this.db
       .prepare(
         `INSERT OR IGNORE INTO positions
          (aircraft_id, flight_id, ts, lat, lon, alt_baro, alt_geom, on_ground, gs, track, baro_rate, geom_rate,
-          ias, tas, mach, squawk, callsign, nic, nac_p, sil, rssi, messages, seen_pos, wd, ws, nav_qnh, source, raw)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          ias, tas, mach, squawk, callsign, nic, nac_p, sil, rssi, messages, seen_pos, wd, ws, nav_qnh, source, raw,
+          pos_type, suspect)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         aircraftId,
@@ -174,7 +195,9 @@ export class Poller {
         p.ws,
         p.navQnh,
         p.source,
-        JSON.stringify(p.raw)
+        JSON.stringify(p.raw),
+        p.posType,
+        suspect ? 1 : 0
       );
   }
 
@@ -183,28 +206,43 @@ export class Poller {
   // suggests an active flight.
   private applyBatch(states: ProviderStates, byHex: Map<string, AircraftRow[]>): boolean {
     let anyActive = false;
-    // The in-memory dedupe watermark and live/UI state are advanced only AFTER
-    // the DB transaction commits. Otherwise a rollback (realistically disk-full)
-    // would leave the watermark ahead of the rolled-back inserts and silently
-    // lose those fixes forever.
-    const applied: { clubId: number; acId: number; p: NormPosition; flightId: number | null }[] = [];
+    // The in-memory dedupe watermark, gate state, and live/UI state are
+    // advanced only AFTER the DB transaction commits. Otherwise a rollback
+    // (realistically disk-full) would leave the watermark ahead of the
+    // rolled-back inserts and silently lose those fixes forever.
+    const gateCfg = this.gateConfig();
+    const applied: { clubId: number; acId: number; p: NormPosition; flightId: number | null; promoted: boolean }[] = [];
+    const suspected: { acId: number; p: NormPosition }[] = [];
     const apply = this.db.transaction(() => {
       for (const p of states.positions) {
         for (const ac of byHex.get(p.hex) ?? []) {
           const lastTs = this.lastTsByAircraft.get(ac.id) ?? 0;
           if (p.ts <= lastTs) continue; // stale fix repeated by the aggregator
+          // Physically implausible fixes (teleporting MLAT solves) are stored
+          // flagged for audit but never reach the detector, the live board, or
+          // the watermark — a suspect fix must not block the real track behind
+          // it. evaluate() is pure; gate state advances post-commit below.
+          const verdict = gateCfg.enabled ? this.gate.evaluate(ac.id, p, gateCfg) : 'accept';
+          if (verdict === 'echo') continue; // same stale solve re-reported: not even worth a row
+          if (verdict === 'suspect') {
+            this.insertPosition(ac.id, p, null, true);
+            suspected.push({ acId: ac.id, p });
+            continue;
+          }
           const flightId = this.detector.onPosition({ id: ac.id, club_id: ac.club_id }, p);
-          this.insertPosition(ac.id, p, flightId);
-          applied.push({ clubId: ac.club_id, acId: ac.id, p, flightId });
+          this.insertPosition(ac.id, p, flightId, false);
+          applied.push({ clubId: ac.club_id, acId: ac.id, p, flightId, promoted: verdict === 'promote' });
         }
       }
     });
     apply(); // throws (and rolls back) on failure — the post-commit block is skipped
     for (const a of applied) {
       this.lastTsByAircraft.set(a.acId, a.p.ts);
+      this.gate.commitAccept(a.acId, a.p, a.promoted);
       this.live.update(a.clubId, a.acId, a.p, a.flightId);
       if (a.flightId !== null && a.p.ts > Date.now() - 120_000) anyActive = true;
     }
+    for (const s of suspected) this.gate.commitSuspect(s.acId, s.p);
     for (const pr of states.presences) {
       for (const ac of byHex.get(pr.hex) ?? []) {
         this.live.presence(ac.club_id, ac.id, pr.ts);

@@ -31,12 +31,12 @@ function world() {
   return { db, now, clubA, clubB, mkAc, settings: new Settings(db), live: new LiveBus(), detector: new FlightDetector(db) };
 }
 
-function pos(hex: string, ts: number): NormPosition {
+function pos(hex: string, ts: number, over: Partial<NormPosition> = {}): NormPosition {
   return {
     hex, ts, lat: 51.35, lon: 0.5, altBaro: 2000, altGeom: null, onGround: false, gs: 100, track: 90,
     baroRate: null, geomRate: null, ias: null, tas: null, mach: null, squawk: null, callsign: null,
-    nic: null, nacP: null, sil: null, rssi: null, messages: null, seenPos: 1, wd: null, ws: null,
-    navQnh: null, source: 'test', raw: {},
+    nic: null, nacP: null, sil: null, rssi: null, messages: null, seenPos: 1, posType: 'adsb_icao',
+    wd: null, ws: null, navQnh: null, source: 'test', raw: {}, ...over,
   };
 }
 
@@ -237,6 +237,90 @@ describe('Poller', () => {
     primaryReturns = EMPTY;
     await poller.runCycle();
     expect(rescueCalls).toHaveLength(0); // budget hit: silence, not spend
+  });
+
+  it('an implausible MLAT teleport is stored suspect and never reaches the board, the flight, or the watermark', async () => {
+    const w = world();
+    const acId = w.mkAc(w.clubA, 'aaaaaa');
+    const t0 = Date.now() - 60_000;
+    let ret: ProviderStates = { positions: [pos('aaaaaa', t0, { posType: 'mlat', nic: 0 })], presences: [] };
+    const primary: AdsbProvider = { name: 'p', fetchStates: async () => ret };
+    const poller = new Poller(w.db, [primary], w.settings, w.detector, w.live);
+    await poller.runCycle(); // baseline fix; flight opens
+    const flightId = w.detector.currentFlightId(acId);
+    expect(flightId).not.toBeNull();
+
+    // 30 nm north 5 s later — a wild MLAT solve.
+    ret = { positions: [pos('aaaaaa', t0 + 5_000, { lat: 51.85, posType: 'mlat', nic: 0 })], presences: [] };
+    await poller.runCycle();
+    const row = w.db
+      .prepare('SELECT flight_id, suspect, pos_type FROM positions WHERE aircraft_id = ? AND ts = ?')
+      .get(acId, t0 + 5_000) as { flight_id: number | null; suspect: number; pos_type: string };
+    expect(row).toMatchObject({ suspect: 1, flight_id: null, pos_type: 'mlat' });
+    expect(w.live.list(w.clubA, 'member')[0].pos?.lat).toBeCloseTo(51.35, 5); // board still shows the real fix
+    const count = (w.db.prepare('SELECT position_count c FROM flights WHERE id = ?').get(flightId) as { c: number }).c;
+    expect(count).toBe(1); // the spike joined no flight and inflated no stats
+
+    // The watermark did not advance: an honest fix behind the spike still lands.
+    ret = { positions: [pos('aaaaaa', t0 + 10_000, { lon: 0.507, posType: 'mlat', nic: 0 })], presences: [] };
+    await poller.runCycle();
+    expect(w.live.list(w.clubA, 'member')[0].pos?.lon).toBeCloseTo(0.507, 5);
+    expect(poller.gateStats()).toMatchObject({ suspected: 1, promoted: 0 });
+  });
+
+  it('a genuine relocation gets through on the second consistent solve', async () => {
+    const w = world();
+    w.mkAc(w.clubA, 'aaaaaa');
+    const t0 = Date.now() - 60_000;
+    let ret: ProviderStates = { positions: [pos('aaaaaa', t0, { posType: 'mlat', nic: 0 })], presences: [] };
+    const primary: AdsbProvider = { name: 'p', fetchStates: async () => ret };
+    const poller = new Poller(w.db, [primary], w.settings, w.detector, w.live);
+    await poller.runCycle();
+    ret = { positions: [pos('aaaaaa', t0 + 5_000, { lat: 51.85, posType: 'mlat', nic: 0 })], presences: [] };
+    await poller.runCycle(); // lone wild solve: quarantined
+    expect(w.live.list(w.clubA, 'member')[0].pos?.lat).toBeCloseTo(51.35, 5);
+    ret = { positions: [pos('aaaaaa', t0 + 10_000, { lat: 51.852, posType: 'mlat', nic: 0 })], presences: [] };
+    await poller.runCycle(); // second consistent solve: the aircraft really moved
+    expect(w.live.list(w.clubA, 'member')[0].pos?.lat).toBeCloseTo(51.852, 5);
+    expect(poller.gateStats()).toMatchObject({ suspected: 1, promoted: 1 });
+  });
+
+  it('the gate can be switched off via settings', async () => {
+    const w = world();
+    w.settings.set('gate_enabled', '0');
+    w.mkAc(w.clubA, 'aaaaaa');
+    const t0 = Date.now() - 60_000;
+    let ret: ProviderStates = { positions: [pos('aaaaaa', t0, { posType: 'mlat', nic: 0 })], presences: [] };
+    const primary: AdsbProvider = { name: 'p', fetchStates: async () => ret };
+    const poller = new Poller(w.db, [primary], w.settings, w.detector, w.live);
+    await poller.runCycle();
+    ret = { positions: [pos('aaaaaa', t0 + 5_000, { lat: 51.85, posType: 'mlat', nic: 0 })], presences: [] };
+    await poller.runCycle();
+    expect(w.live.list(w.clubA, 'member')[0].pos?.lat).toBeCloseTo(51.85, 5); // gate off: everything passes
+    expect(poller.gateStats().suspected).toBe(0);
+  });
+
+  it('a restart judges against the last accepted fix, not a newer suspect row', async () => {
+    const w = world();
+    const acId = w.mkAc(w.clubA, 'aaaaaa');
+    const t0 = Date.now() - 60_000;
+    let ret: ProviderStates = { positions: [pos('aaaaaa', t0, { posType: 'mlat', nic: 0 })], presences: [] };
+    const primary: AdsbProvider = { name: 'p', fetchStates: async () => ret };
+    const first = new Poller(w.db, [primary], w.settings, w.detector, w.live);
+    await first.runCycle();
+    ret = { positions: [pos('aaaaaa', t0 + 5_000, { lat: 51.85, posType: 'mlat', nic: 0 })], presences: [] };
+    await first.runCycle(); // suspect row now sits at the newest ts
+
+    // New process: watermark and gate must prime from the accepted fix. An
+    // honest fix older than the suspect row still lands and shows.
+    const second = new Poller(w.db, [primary], w.settings, w.detector, w.live);
+    ret = { positions: [pos('aaaaaa', t0 + 3_000, { lon: 0.503, posType: 'mlat', nic: 0 })], presences: [] };
+    await second.runCycle();
+    const stored = w.db
+      .prepare('SELECT suspect FROM positions WHERE aircraft_id = ? AND ts = ?')
+      .get(acId, t0 + 3_000) as { suspect: number };
+    expect(stored).toMatchObject({ suspect: 0 });
+    expect(w.live.list(w.clubA, 'member')[0].pos?.lon).toBeCloseTo(0.503, 5);
   });
 
   it('presences never advance the position dedupe watermark or store rows', async () => {

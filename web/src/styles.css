@@ -721,6 +721,16 @@ label.check {
   color: var(--ink);
   line-height: 1.35;
 }
+/* Rail (unfocused) cards keep descriptions to two tidy lines so a wordy
+   blurb can't stretch the whole kiosk rail. */
+.board-card-desc.compact {
+  font-size: 0.8rem;
+  color: var(--ink-dim);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 .target-tagline {
   margin: 0.55rem 0.75rem 0;
   font-size: 0.85rem;

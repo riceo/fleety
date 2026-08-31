@@ -379,3 +379,78 @@ describe('club settings: other traffic', () => {
     expect(stored).toEqual({ enabled: true, maxAltFt: 60000, radiusNm: 5, color: '#7d8db5' });
   });
 });
+
+describe('club settings: fleet colour', () => {
+  let w: World;
+  beforeEach(async () => {
+    w = await build();
+  });
+  afterEach(async () => {
+    await w.app.close();
+  });
+
+  it('round-trips through admin settings, reaches /api/config, and rejects junk', async () => {
+    const cfg = async () =>
+      (await w.app.inject({ method: 'GET', url: '/api/config', headers: H('alpha.fleety.live') })).json() as {
+        fleetColor: string;
+      };
+    expect((await cfg()).fleetColor).toBe('#e32636'); // migration default
+
+    const r = await w.app.inject({
+      method: 'PUT',
+      url: '/api/admin/settings',
+      headers: H('alpha.fleety.live', w.adminACookie),
+      payload: { fleetColor: '#123abc' },
+    });
+    expect(r.statusCode).toBe(200);
+    expect((r.json() as { club: { fleet_color: string } }).club.fleet_color).toBe('#123abc');
+    expect((await cfg()).fleetColor).toBe('#123abc');
+
+    // Junk colour is ignored; a save not mentioning the field leaves it alone.
+    await w.app.inject({
+      method: 'PUT',
+      url: '/api/admin/settings',
+      headers: H('alpha.fleety.live', w.adminACookie),
+      payload: { fleetColor: 'url(javascript:x)' },
+    });
+    await w.app.inject({
+      method: 'PUT',
+      url: '/api/admin/settings',
+      headers: H('alpha.fleety.live', w.adminACookie),
+      payload: { name: 'ALPHA AERO' },
+    });
+    expect((await cfg()).fleetColor).toBe('#123abc');
+  });
+
+  it('poller resolves effective colour: overrides win, others inherit the club colour', async () => {
+    const now = Date.now();
+    w.db
+      .prepare(
+        "INSERT INTO aircraft (club_id, hex, registration, color, color_custom, created_at, updated_at) VALUES (?, 'a00001', 'G-INHT', '#38bdf8', 0, ?, ?)"
+      )
+      .run(w.clubA, now, now);
+    w.db
+      .prepare(
+        "INSERT INTO aircraft (club_id, hex, registration, color, color_custom, created_at, updated_at) VALUES (?, 'a00002', 'G-OWNC', '#00ff00', 1, ?, ?)"
+      )
+      .run(w.clubA, now, now);
+    w.db.prepare("UPDATE clubs SET fleet_color = '#ff8800' WHERE id = ?").run(w.clubA);
+
+    const { LiveBus } = await import('./live/liveBus.js');
+    const { FlightDetector } = await import('./tracking/flightDetector.js');
+    const { Poller } = await import('./tracking/poller.js');
+    const { Settings } = await import('./settings.js');
+    const live = new LiveBus();
+    const poller = new Poller(
+      w.db,
+      [{ name: 'test', fetchStates: async () => ({ positions: [], presences: [] }) }],
+      new Settings(w.db),
+      new FlightDetector(w.db),
+      live
+    );
+    await poller.runCycle();
+    const byReg = new Map(live.list(w.clubA, 'member').map((a) => [a.registration, a.color]));
+    expect(byReg.get('G-INHT')).toBe('#ff8800'); // inherits the club colour
+    expect(byReg.get('G-OWNC')).toBe('#00ff00'); // explicit override kept
+  });
+});

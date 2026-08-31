@@ -38,7 +38,9 @@ function BoardCard({ a, focused }: { a: LiveAircraft; focused: boolean }) {
         <div className="mono-label">
           {a.registration} · {(a.nickname || a.typeName).toUpperCase()}
         </div>
-        {focused && a.description && <div className="board-card-desc">{a.description}</div>}
+        {/* Description shows on every card, not just the focused one — the
+            rail is where visitors read what each aircraft actually is. */}
+        {a.description && <div className={`board-card-desc${focused ? '' : ' compact'}`}>{a.description}</div>}
         {airborne && a.pos ? (
           <>
             <div className="board-card-data">
